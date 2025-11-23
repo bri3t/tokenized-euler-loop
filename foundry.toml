@@ -2,6 +2,7 @@
 src = "src"
 out = "out"
 libs = ["lib"]
+via_ir = true
 
 [rpc_endpoints]
 base_mainnet = "${ALCHEMY_BASE_MAINNET}"

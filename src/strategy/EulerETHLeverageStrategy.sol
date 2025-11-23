@@ -65,7 +65,7 @@ contract EulerETHLeverageStrategy is ILeverageStrategy {
         require(_usdc != address(0), "USDC address is zero");
         require(_eWeth != address(0), "eWETH address is zero");
         require(_eUsdc != address(0), "eUSDC address is zero");
-        require(_uniRouter != address(0), "Router address is zero");
+        // require(_uniRouter != address(0), "Router address is zero");
         require(_vault != address(0), "Vault address is zero");
         require(_targetLeverage >= 1e18, "Leverage must be >= 1x");
 
