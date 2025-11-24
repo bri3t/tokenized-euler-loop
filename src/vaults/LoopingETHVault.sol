@@ -5,6 +5,7 @@ import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {ERC4626} from "@openzeppelin/contracts/token/ERC20/extensions/ERC4626.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 
 import {ILeverageStrategy} from "../strategy/ILeverageStrategy.sol";
 import {IWETH} from "../interfaces/IWETH.sol";
@@ -13,7 +14,7 @@ import {IWETH} from "../interfaces/IWETH.sol";
 ///         and delegates leverage logic to an external strategy.
 /// @dev Users can deposit WETH directly via `deposit`/`mint`,
 ///      or deposit ETH via `depositETH`, which wraps to WETH and then deposits.
-contract LoopingETHVault is ERC20, ERC4626 {
+contract LoopingETHVault is ERC20, ERC4626, Ownable {
     using SafeERC20 for IERC20;
 
     /// @notice Override decimals to resolve ambiguity between ERC20 and ERC4626.
@@ -22,29 +23,31 @@ contract LoopingETHVault is ERC20, ERC4626 {
     }
 
     /// @notice Leverage strategy that manages the underlying position (Euler + Uniswap + flash loans).
-    ILeverageStrategy public immutable strategy;
+    ILeverageStrategy public strategy;
 
     /// @notice WETH token used as the underlying for this vault.
     IWETH public immutable weth;
 
     /// @param _weth Address of the WETH token (will be the ERC-4626 underlying).
-    /// @param _strategy Address of the strategy contract managing the leveraged position.
     /// @param _name ERC-20 name for the vault shares.
     /// @param _symbol ERC-20 symbol for the vault shares.
     constructor(
         IERC20 _weth,
-        ILeverageStrategy _strategy,
         string memory _name,
         string memory _symbol
     )
         ERC20(_name, _symbol)
         ERC4626(_weth)
+        Ownable(msg.sender)
     {
         require(address(_weth) != address(0), "WETH address is zero");
-        require(address(_strategy) != address(0), "Strategy address is zero");
 
-        strategy = _strategy;
         weth = IWETH(address(_weth));
+    }
+
+    /// @param _strategy Address of the strategy contract managing the leveraged position.
+    function setStrategy(ILeverageStrategy _strategy) external onlyOwner {
+        strategy = _strategy;
     }
 
     // =========================
@@ -79,7 +82,6 @@ contract LoopingETHVault is ERC20, ERC4626 {
 
         // 2) Vault now holds `assets` WETH.
         //    Approve and delegate to strategy to open/update the leveraged position.
-        IERC20(address(weth)).approve(address(strategy), 0);
         IERC20(address(weth)).approve(address(strategy), assets);
 
         strategy.openPosition(assets);

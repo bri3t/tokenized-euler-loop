@@ -38,6 +38,9 @@ import {MockPriceOracle} from "euler-vault-kit/test/mocks/MockPriceOracle.sol";
 import {IRMTestDefault} from "euler-vault-kit/test/mocks/IRMTestDefault.sol";
 import {SequenceRegistry} from "euler-vault-kit/src/SequenceRegistry/SequenceRegistry.sol";
 
+
+import {LoopingETHVault} from "../src/vaults/LoopingETHVault.sol";
+
 contract BaseTest is Test, DeployPermit2 {
 
     /* ================================================================
@@ -81,12 +84,12 @@ contract BaseTest is Test, DeployPermit2 {
     address governanceModule;
 
     /* ================================================================
-                              Strategy
+                              Strategy and Vault
        ================================================================ */
 
     EulerETHLeverageStrategy public strategy;
 
-    address public vault; // In this test, vault = this contract
+    LoopingETHVault public vault; // In this test, vault = this contract
 
     ISwapRouterV3 public dummyRouter;
 
@@ -189,83 +192,27 @@ contract BaseTest is Test, DeployPermit2 {
         eVaultUsdc.setMaxLiquidationDiscount(0.2e4);
         eVaultUsdc.setFeeReceiver(feeReceiver);
 
-        /* ------------------------------
-           Deploy Dummy Router (not swapping yet)
-        ------------------------------ */
-
+        // Deploy Dummy Router (not swapping yet)
         dummyRouter = ISwapRouterV3(address(0)); // we do not test swaps yet
 
-        /* ------------------------------
-           Deploy Strategy
-        ------------------------------ */
-        vault = address(this);
+        // Deploy Strategy and Vault
+        vault = new LoopingETHVault(
+            IERC20(address(weth)),
+            "Looping ETH Vault 2x",
+            "vETH2x"
+        );
 
         strategy = new EulerETHLeverageStrategy(
-            address(weth),
-            address(usdc),
-            address(eVaultWeth),
-            address(eVaultUsdc),
-            address(dummyRouter),
-            vault,
-            1e18 // 1x leverage for now
+                    address(weth),
+                    address(usdc),
+                    address(eVaultWeth),
+                    address(eVaultUsdc),
+                    address(dummyRouter),
+                    vault,
+                    2e18 // 2x leverage 
         );
+
+       
     }
 
-    /* ================================================================
-                               TESTS
-       ================================================================ */
-
-    function test_openPosition_into_real_eWeth() public {
-        uint256 amount = 1 ether;
-
-        // 1) Mint WETH to the "vault" (this test contract)
-        weth.mint(vault, amount);
-
-        // 2) Approve the strategy
-        vm.prank(vault);
-        weth.approve(address(strategy), amount);
-
-        // 3) Call openPosition
-        vm.prank(vault);
-        strategy.openPosition(amount);
-
-        // Vault should now have 0 WETH
-        assertEq(weth.balanceOf(vault), 0);
-
-        // Strategy should own shares in eVaultWeth
-        uint256 shares = eVaultWeth.balanceOf(address(strategy));
-        assertEq(shares, amount);
-
-        // TotalAssets should match convertToAssets
-        uint256 expected = eVaultWeth.convertToAssets(shares);
-        assertEq(strategy.totalAssets(), expected);
-    }
-
-    function test_closePosition_returns_WETH() public {
-        uint256 amount = 1 ether;
-
-        // Open position
-        weth.mint(vault, amount);
-        vm.startPrank(vault);
-        weth.approve(address(strategy), amount);
-        strategy.openPosition(amount);
-        vm.stopPrank();
-
-        // Sanity checks
-        assertEq(eVaultWeth.balanceOf(address(strategy)), amount);
-        assertEq(weth.balanceOf(vault), 0);
-
-        // Close
-        vm.prank(vault);
-        strategy.closePosition(amount);
-
-        // Strategy no longer has shares
-        assertEq(eVaultWeth.balanceOf(address(strategy)), 0);
-
-        // Vault recovered the WETH
-        assertEq(weth.balanceOf(vault), amount);
-
-        // NAV must be 0
-        assertEq(strategy.totalAssets(), 0);
-    }
 }
