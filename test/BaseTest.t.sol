@@ -22,7 +22,9 @@ import {BalanceForwarder} from "euler-vault-kit/src/EVault/modules/BalanceForwar
 import {Governance} from "euler-vault-kit/src/EVault/modules/Governance.sol";
 import {RiskManager} from "euler-vault-kit/src/EVault/modules/RiskManager.sol";
 
-import {IEVault, IERC20} from "euler-vault-kit/src/EVault/IEVault.sol";
+
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {IEVault} from "euler-vault-kit/src/EVault/IEVault.sol";
 import {TypesLib} from "euler-vault-kit/src/EVault/shared/types/Types.sol";
 import {Base} from "euler-vault-kit/src/EVault/shared/Base.sol";
 
@@ -39,7 +41,8 @@ import {IRMTestDefault} from "euler-vault-kit/test/mocks/IRMTestDefault.sol";
 import {SequenceRegistry} from "euler-vault-kit/src/SequenceRegistry/SequenceRegistry.sol";
 
 
-import {LoopingETHVault} from "../src/vaults/LoopingETHVault.sol";
+
+import {LoopingVault} from "../src/vaults/LoopingVault.sol";
 
 contract BaseTest is Test, DeployPermit2 {
 
@@ -89,7 +92,7 @@ contract BaseTest is Test, DeployPermit2 {
 
     EulerETHLeverageStrategy public strategy;
 
-    LoopingETHVault public vault; // In this test, vault = this contract
+    LoopingVault public vault; // In this test, vault = this contract
 
     ISwapRouterV3 public dummyRouter;
 
@@ -196,7 +199,7 @@ contract BaseTest is Test, DeployPermit2 {
         dummyRouter = ISwapRouterV3(address(0)); // we do not test swaps yet
 
         // Deploy Strategy and Vault
-        vault = new LoopingETHVault(
+        vault = new LoopingVault(
             IERC20(address(weth)),
             "Looping ETH Vault 2x",
             "vETH2x"
@@ -208,9 +211,11 @@ contract BaseTest is Test, DeployPermit2 {
                     address(eVaultWeth),
                     address(eVaultUsdc),
                     address(dummyRouter),
-                    vault,
+                    address(vault),
                     2e18 // 2x leverage 
         );
+
+        vault.setStrategy(strategy);
 
        
     }

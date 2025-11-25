@@ -14,7 +14,7 @@ import {IWETH} from "../interfaces/IWETH.sol";
 ///         and delegates leverage logic to an external strategy.
 /// @dev Users can deposit WETH directly via `deposit`/`mint`,
 ///      or deposit ETH via `depositETH`, which wraps to WETH and then deposits.
-contract LoopingETHVault is ERC20, ERC4626, Ownable {
+contract LoopingVault is ERC20, ERC4626, Ownable {
     using SafeERC20 for IERC20;
 
     /// @notice Override decimals to resolve ambiguity between ERC20 and ERC4626.
@@ -25,24 +25,20 @@ contract LoopingETHVault is ERC20, ERC4626, Ownable {
     /// @notice Leverage strategy that manages the underlying position (Euler + Uniswap + flash loans).
     ILeverageStrategy public strategy;
 
-    /// @notice WETH token used as the underlying for this vault.
-    IWETH public immutable weth;
 
-    /// @param _weth Address of the WETH token (will be the ERC-4626 underlying).
+    /// @param _asset Address of the WETH token (will be the ERC-4626 underlying).
     /// @param _name ERC-20 name for the vault shares.
     /// @param _symbol ERC-20 symbol for the vault shares.
     constructor(
-        IERC20 _weth,
+        IERC20 _asset,
         string memory _name,
         string memory _symbol
     )
         ERC20(_name, _symbol)
-        ERC4626(_weth)
+        ERC4626(_asset)
         Ownable(msg.sender)
     {
-        require(address(_weth) != address(0), "WETH address is zero");
-
-        weth = IWETH(address(_weth));
+        require(address(_asset) != address(0), "WETH address is zero");
     }
 
     /// @param _strategy Address of the strategy contract managing the leveraged position.
@@ -82,7 +78,7 @@ contract LoopingETHVault is ERC20, ERC4626, Ownable {
 
         // 2) Vault now holds `assets` WETH.
         //    Approve and delegate to strategy to open/update the leveraged position.
-        IERC20(address(weth)).approve(address(strategy), assets);
+        IERC20(address(asset())).approve(address(strategy), assets);
 
         strategy.openPosition(assets);
     }
@@ -106,29 +102,4 @@ contract LoopingETHVault is ERC20, ERC4626, Ownable {
         super._withdraw(caller, receiver, owner, assets, shares);
     }
 
-    // =========================
-    //      ETH CONVENIENCE
-    // =========================
-
-    /// @notice Convenience function: deposit ETH directly instead of WETH.
-    /// @dev Wraps ETH into WETH, then calls the standard ERC-4626 `deposit`.
-    /// @param receiver Address that will receive the vault shares.
-    /// @return shares Amount of vault shares minted to `receiver`.
-    function depositETH(address receiver) external payable returns (uint256 shares) {
-        require(msg.value > 0, "No ETH sent");
-
-        // 1) Wrap ETH into WETH. The ETH sent in this call is held by this contract,
-        //    so we can safely call `deposit` on WETH with msg.value.
-        weth.deposit{value: msg.value}();
-
-        // 2) Now this contract holds `msg.value` WETH.
-        //    Use the standard ERC-4626 deposit flow, where `caller` is this contract.
-        shares = deposit(msg.value, receiver);
-    }
-
-    /// @notice Allow receiving ETH (required for WETH.deposit to work).
-    receive() external payable {
-        // This contract should only receive ETH from the WETH contract during unwrap,
-        // or from users calling `depositETH`. No extra logic needed.
-    }
 }

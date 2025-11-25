@@ -1,9 +1,8 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
-
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {IEVault} from "euler-vault-kit/src/EVault/IEVault.sol"; 
 import {ILeverageStrategy} from "./ILeverageStrategy.sol";
 import {ISwapRouterV3} from "../interfaces/ISwapRouterV3.sol";
@@ -17,21 +16,21 @@ import {ISwapRouterV3} from "../interfaces/ISwapRouterV3.sol";
 ///        but the exact EVault calls (flashLoan, borrow, repay) are left as TODO
 ///        so you can plug in the correct signatures from your local EVK.
 contract EulerETHLeverageStrategy is ILeverageStrategy {
-    using SafeERC20 for IERC20;
+    // using SafeERC20 for IERC20;
 
-    /// @notice WETH used as underlying for the vault.
-    IERC20 public immutable weth;
+    /// @notice Underlying asset for the vault.
+    IERC20 public immutable vaultAsset;
 
-    /// @notice USDC used as debt / flash asset.
-    IERC20 public immutable usdc;
+    /// @notice Debt asset.
+    IERC20 public immutable dToken;
 
-    /// @notice Euler EVault for WETH collateral.
-    IEVault public immutable eWeth;
+    /// @notice Euler EVault for vaultAsset collateral.
+    IEVault public immutable eCollateral;
 
-    /// @notice Euler EVault for USDC (flash + borrow).
-    IEVault public immutable eUsdc;
+    /// @notice Euler EVault for dToken (flash + borrow).
+    IEVault public immutable eDebt;
 
-    /// @notice Uniswap V3 router for USDC <-> WETH swaps.
+    /// @notice Uniswap V3 router for swaps.
     ISwapRouterV3 public immutable uniRouter;
 
     /// @notice Looping vault that is allowed to call this strategy.
@@ -45,58 +44,54 @@ contract EulerETHLeverageStrategy is ILeverageStrategy {
         _;
     }
 
-    /// @param _weth Address of WETH token (vault underlying).
-    /// @param _usdc Address of USDC token (debt asset).
-    /// @param _eWeth Address of the Euler EVault for WETH.
-    /// @param _eUsdc Address of the Euler EVault for USDC.
+    /// @param _vaultAsset Address of asset token (vault underlying).
+    /// @param _dToken Address of debt token.
+    /// @param _eCollateral Address of the Euler EVault for collateral.
+    /// @param _eDebt Address of the Euler EVault for debt.
     /// @param _uniRouter Address of Uniswap V3 router.
-    /// @param _vault Address of the LoopingETHVault that owns this strategy.
+    /// @param _vault Address of the LoopingVault that owns this strategy.
     /// @param _targetLeverage Target leverage (e.g. 5e18 for 5x).
     constructor(
-        address _weth,
-        address _usdc,
-        address _eWeth,
-        address _eUsdc,
+        address _vaultAsset,
+        address _dToken,
+        address _eCollateral,
+        address _eDebt,
         address _uniRouter,
         address _vault,
         uint256 _targetLeverage
     ) {
-        require(_weth != address(0), "WETH address is zero");
-        require(_usdc != address(0), "USDC address is zero");
-        require(_eWeth != address(0), "eWETH address is zero");
-        require(_eUsdc != address(0), "eUSDC address is zero");
+        require(_vaultAsset != address(0), "WETH address is zero");
+        require(_dToken != address(0), "USDC address is zero");
+        require(_eCollateral != address(0), "eCollateral address is zero");
+        require(_eDebt != address(0), "eUSDC address is zero");
         // require(_uniRouter != address(0), "Router address is zero");
         require(_vault != address(0), "Vault address is zero");
         require(_targetLeverage >= 1e18, "Leverage must be >= 1x");
 
-        weth = IERC20(_weth);
-        usdc = IERC20(_usdc);
-        eWeth = IEVault(_eWeth);
-        eUsdc = IEVault(_eUsdc);
+        vaultAsset = IERC20(_vaultAsset);
+        dToken = IERC20(_dToken);
+        eCollateral = IEVault(_eCollateral);
+        eDebt = IEVault(_eDebt);
         uniRouter = ISwapRouterV3(_uniRouter);
         vault = _vault;
         targetLeverage = _targetLeverage;
     }
 
-    // =========================
-    //     ILeverageStrategy
-    // =========================
-
-    /// @notice Called by the vault after a user deposit of WETH.
+    /// @notice Called by the vault after a user deposit of the underlying asset.
     /// @dev High-level target flow for 5x leverage (example):
-    ///      - Let equity = amount (WETH from user).
-    ///      - Compute target position size in WETH: pos = equity * targetLeverage.
-    ///      - Derive how much USDC you need as flash liquidity to reach that position.
-    ///      - Flash loan USDC from eUsdc.
-    ///      - Swap USDC -> WETH via Uniswap.
-    ///      - Deposit total WETH (user + swapped) into eWeth as collateral.
-    ///      - Borrow USDC from eUsdc against that collateral.
-    ///      - Use borrowed USDC to repay the flash loan.
+    ///      - Let equity = amount (underlying asset from user).
+    ///      - Compute target position size in underlying asset: pos = equity * targetLeverage.
+    ///      - Derive how much debt token you need as flash liquidity to reach that position.
+    ///      - Flash loan debt token from eDebt.
+    ///      - Swap debt token -> underlying asset via Uniswap.
+    ///      - Deposit total underlying asset (user + swapped) into eCollateral as collateral.
+    ///      - Borrow debt token from eDebt against that collateral.
+    ///      - Use borrowed debt token to repay the flash loan.
     function openPosition(uint256 amount) external override onlyVault {
         if (amount == 0) return;
 
-        // 1) Pull WETH from the vault into this strategy.
-        weth.safeTransferFrom(msg.sender, address(this), amount);
+        // 1) Pull underlying asset from the vault into this strategy.
+        vaultAsset.transferFrom(msg.sender, address(this), amount);
 
         // ============================
         //  A. Compute leverage numbers
@@ -107,33 +102,33 @@ contract EulerETHLeverageStrategy is ILeverageStrategy {
         //
         // Example pseudo:
         //
-        // uint256 equityWeth = amount;
-        // uint256 targetPosWeth = equityWeth * targetLeverage / 1e18; // total WETH exposure wanted
-        // uint256 extraWethNeeded = targetPosWeth - equityWeth;
+        // uint256 equityUnderlying = amount;
+        // uint256 targetPosUnderlying = equityUnderlying * targetLeverage / 1e18; // total underlying asset exposure wanted
+        // uint256 extraUnderlyingNeeded = targetPosUnderlying - equityUnderlying;
         //
-        // To get extraWethNeeded you will flash loan USDC and swap to WETH.
-        // You will then borrow enough USDC so that, after repaying the flash loan,
+        // To get extraUnderlyingNeeded you will flash loan debt token and swap to underlying asset.
+        // You will then borrow enough debt token so that, after repaying the flash loan,
         // the remaining state is:
-        //   - eWeth: targetPosWeth supplied
-        //   - eUsdc: some USDC debt
+        //   - eCollateral: targetPosUnderlying supplied
+        //   - eDebt: some debt token debt
         //
         // For now, we leave this math as TODO.
 
         // ============================
-        //  B. Flash loan USDC
+        //  B. Flash loan debt token
         // ============================
         //
         // Here you will:
-        //  - request a flash loan of `flashAmountUsdc` from eUsdc.
+        //  - request a flash loan of `flashAmountUsdc` from eDebt.
         //  - pass encoded data so that the callback knows:
-        //      - how much WETH to buy
+        //      - how much underlying asset to buy
         //      - how much to deposit
-        //      - how much USDC to borrow at the end
+        //      - how much debt token to borrow at the end
         //
         // PSEUDO-CODE (replace with actual EVault flashLoan API):
         //
         // bytes memory data = abi.encode(amount, /* any other params needed */);
-        // eUsdc.flashLoan(address(this), address(usdc), flashAmountUsdc, data);
+        // eDebt.flashLoan(address(this), address(dToken), flashAmountDebtToken, data);
         //
         // Where this contract must implement the appropriate onFlashLoan/onDeferredLiquidityCheck
         // callback required by EVK/EVC.
@@ -146,9 +141,9 @@ contract EulerETHLeverageStrategy is ILeverageStrategy {
         //
         // So that you can still run tests without flash logic completed, you can keep
         // a simple "no leverage" deposit as a temporary fallback:
-        weth.approve(address(eWeth), 0);
-        weth.approve(address(eWeth), amount);
-        eWeth.deposit(amount, address(this));
+        vaultAsset.approve(address(eCollateral), 0);
+        vaultAsset.approve(address(eCollateral), amount);
+        eCollateral.deposit(amount, address(this));
     }
 
     /// @notice Called by the vault before a user withdrawal.
@@ -161,38 +156,38 @@ contract EulerETHLeverageStrategy is ILeverageStrategy {
     ///          * swap some WETH back to USDC to repay flash,
     ///          * send remaining WETH to the vault.
     ///      - In this skeleton, we only support the "no leverage" case and simply
-    ///        withdraw WETH from eWeth and send it back to the vault.
+    ///        withdraw WETH from eCollateral and send it back to the vault.
     function closePosition(uint256 assetsToReturn) external override onlyVault {
         if (assetsToReturn == 0) return;
 
         // TODO: once leverage is implemented, this must:
         //  - calculate proportional position to unwind,
-        //  - repay part of eUsdc debt,
+        //  - repay part of eDebt debt,
         //  - withdraw WETH collateral,
         //  - handle flash loan repays if used.
 
-        // For now: simple withdraw from eWeth (no debt assumed).
-        eWeth.withdraw(assetsToReturn, address(this), address(this));
+        // For now: simple withdraw from eCollateral (no debt assumed).
+        eCollateral.withdraw(assetsToReturn, address(this), address(this));
 
         // Send WETH back to the vault so it can complete the ERC-4626 withdraw.
-        weth.safeTransfer(msg.sender, assetsToReturn);
+        vaultAsset.transfer(msg.sender, assetsToReturn);
     }
 
     /// @notice Returns the net value managed by the strategy, denominated in WETH units.
     /// @dev Current simple version:
-    ///      - Only considers WETH supplied to eWeth + idle WETH here.
+    ///      - Only considers WETH supplied to eCollateral + idle WETH here.
     ///      Future version (with leverage):
     ///      - Must price:
-    ///          * WETH collateral in eWeth
-    ///          * USDC debt in eUsdc
+    ///          * WETH collateral in eCollateral
+    ///          * USDC debt in eDebt
     ///        using oracle prices, and return NAV in WETH.
     function totalAssets() external view override returns (uint256) {
-        uint256 eShares = eWeth.balanceOf(address(this));
-        uint256 supplied = eWeth.convertToAssets(eShares);
-        uint256 idle = weth.balanceOf(address(this));
+        uint256 eShares = eCollateral.balanceOf(address(this));
+        uint256 supplied = eCollateral.convertToAssets(eShares);
+        uint256 idle = vaultAsset.balanceOf(address(this));
 
         // TODO: when you add leverage, subtract USDC debt valued in WETH terms.
-        // uint256 usdcDebt = eUsdc.debtOf(address(this)); // or similar, check EVK API
+        // uint256 usdcDebt = eDebt.debtOf(address(this)); // or similar, check EVK API
         // uint256 usdcPriceInWeth = ...;                  // use price oracle
         // uint256 debtInWeth = usdcDebt * usdcPriceInWeth / 1e18;
         // return supplied + idle - debtInWeth;

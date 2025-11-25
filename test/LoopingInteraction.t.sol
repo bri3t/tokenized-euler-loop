@@ -6,8 +6,32 @@ import "forge-std/Test.sol";
 
 contract LoopingInteraction is BaseTest {
 
+    address user1;
+    address user2;
+
+    uint256 a1;
+    uint256 a2;
+
     function setUp() public override {
         super.setUp();
+
+        user1 = makeAddr("user1");
+        user2 = makeAddr("user2");
+
+        a1 = 1e18;
+        a2 = 2e18;
+
+        weth.mint(user1, a1);
+        assertEq(weth.balanceOf(user1), a1);
+        weth.mint(user2, a2);
+        assertEq(weth.balanceOf(user2), a2);
+
+
+        // Mint WETH to both users
+        vm.deal(user1, a1);
+        vm.deal(user2, a2);
+        assertEq(user1.balance, a1);
+        assertEq(user2.balance, a2);
     }
 
     /// @notice Ensure only the configured vault address can call strategy methods.
@@ -16,8 +40,7 @@ contract LoopingInteraction is BaseTest {
         uint256 amount = 1 ether;
 
         // Mint some WETH to the attacker
-        // weth.mint(attacker, amount);
-        vm.deal(attacker, 1 ether);
+        weth.mint(attacker, amount);
         // Attacker tries to call openPosition directly -> should revert
         vm.prank(attacker);
         vm.expectRevert(bytes("Strategy: caller is not vault"));
@@ -32,55 +55,30 @@ contract LoopingInteraction is BaseTest {
     /// @notice Simulate two users depositing WETH to the vault (the test contract acts as the vault)
     /// and withdrawing later. This checks interaction between users, the vault and the strategy.
     function test_multiple_users_deposit_and_withdraw() public {
-        address user1 = makeAddr("user1");
-        address user2 = makeAddr("user2");
-
-        uint256 a1 = 1 ether;
-        uint256 a2 = 2 ether;
-
-        // Mint WETH to both users
-        vm.deal(user1, a1);
-        vm.deal(user2, a2);
-        assertEq(user1.balance, a1);
-        assertEq(user2.balance, a2);
-
-        // USER1 approves the vault and the vault pulls WETH 
-        // Using `setAllowance` on the mock to avoid transfer/allowance edge-cases
-        // weth.setAllowance(user1, vault, a1);
-
-        vm.prank(user1);
         
 
-        vm.prank(vault);
-        weth.transferFrom(user1, vault, a1);
-        assertEq(weth.balanceOf(vault), a1);
+        assertEq(weth.balanceOf(address(strategy)), 0, "Strategy WETH balance should be zero at start");
 
-        // Now the vault forwards to strategy (vault calls strategy.openPosition)
-        // Vault must approve the strategy to pull the WETH it holds
-        vm.prank(vault);
-        weth.approve(address(strategy), a1);
+        // User1 deposits 1 ETH via the looping vault
+        vm.startPrank(user1);
+        weth.approve(address(vault), a1);
+        vault.deposit(a1, user1);
+        vm.stopPrank();
 
-        vm.prank(vault);
-        strategy.openPosition(a1);
+        assertEq(weth.balanceOf(user1), 0, "User1 WETH balance should be zero after deposit");
+        assertEq(vault.totalAssets(), a1, "Vault total assets should be a1 after user1 deposit");
 
         // Strategy should have deposited into eWeth
         assertEq(eVaultWeth.balanceOf(address(strategy)), a1);
-        assertEq(weth.balanceOf(vault), 0);
 
-        // USER2 approves and vault pulls WETH
-        weth.setAllowance(user2, vault, a2);
-        vm.prank(vault);
-        weth.transferFrom(user2, vault, a2);
-        assertEq(weth.balanceOf(vault), a2);
 
-        // Vault approves strategy for the second deposit as well
-        vm.prank(vault);
-        weth.approve(address(strategy), a2);
+        // User2 deposits 2 ETH via the looping vault
+        vm.startPrank(user2);
+        weth.approve(address(vault), a2);
+        vault.deposit(a2, user2);
+        vm.stopPrank();
 
-        vm.prank(vault);
-        strategy.openPosition(a2);
-
-        // Strategy now holds both deposits in eWeth (no leverage mode)
+        // Strategy now holds both deposits in eWeth 
         assertEq(eVaultWeth.balanceOf(address(strategy)), a1 + a2);
 
         // Total assets reported by strategy should match eWeth.convertToAssets(shares)
@@ -89,21 +87,14 @@ contract LoopingInteraction is BaseTest {
         assertEq(strategy.totalAssets(), expectedAssets);
 
         // Now simulate USER1 withdrawing their assets: vault asks strategy to close position
-        // For simplicity we return `a1` back to the vault, then vault sends to user1.
-        vm.prank(vault);
-        strategy.closePosition(a1);
+        vm.prank(user1);
+        vault.withdraw(a1, user1, user1);
 
         // Vault should have received WETH back
-        assertEq(weth.balanceOf(vault), a1);
+        assertEq(user1.balance, a1, "User1 ETH balance should match a1 after withdrawal");
 
         // Strategy should have reduced its eWeth holdings
-        assertEq(eVaultWeth.balanceOf(address(strategy)), a2);
-
-        // Vault sends withdrawn WETH to user1
-        vm.prank(vault);
-        weth.transfer(user1, a1);
-
-        assertEq(weth.balanceOf(user1), a1);
+        assertEq(eVaultWeth.balanceOf(address(strategy)), a2, "Strategy eWeth balance should match a2 after user1 withdrawal");
 
         // Remaining assets on strategy should match a2
         uint256 remainingShares = eVaultWeth.balanceOf(address(strategy));
