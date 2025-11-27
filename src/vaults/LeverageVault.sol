@@ -10,7 +10,11 @@ import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {ILeverageVault} from "../interfaces/ILeverageVault.sol";
 
 import {IEVault} from "euler-vault-kit/src/EVault/IEVault.sol";
+import {IPriceOracle} from "euler-vault-kit/src/interfaces/IPriceOracle.sol";
 import {IFlashLoan} from "euler-vault-kit/src/interfaces/IFlashLoan.sol";
+import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
+
+import "forge-std/console2.sol";
 
 interface ISwapper {
     /// @notice Swaps 'amountIn' of tokenIn into tokenOut, sending the output to 'to'.
@@ -30,7 +34,7 @@ interface ISwapper {
 }
 
 
-contract LeverageVault is ERC4626, Ownable, ILeverageVault, IFlashLoan {
+contract LeverageVault is ERC4626, Ownable, IFlashLoan {
     using SafeERC20 for IERC20;
 
 
@@ -38,17 +42,16 @@ contract LeverageVault is ERC4626, Ownable, ILeverageVault, IFlashLoan {
     IERC20 public immutable dToken;
 
     /// @notice Euler EVault for debt token (flash + borrow).
-    IEVault public immutable DEVAULT;
+    IEVault public immutable dEVault;
 
     /// @notice Euler EVault for collateral token.
-    IEVault public immutable CEVAULT;
+    IEVault public immutable cEVault;
 
 
     ISwapper public immutable swapper;
 
     /// @notice Target leverage (e.g. 5e18 = 5x).
-    uint256 public immutable TARGETLEVERAGE;
-
+    uint256 public immutable targetLeverage;
 
     struct VaultState {
         uint256 collateral;      // in asset() units
@@ -59,7 +62,6 @@ contract LeverageVault is ERC4626, Ownable, ILeverageVault, IFlashLoan {
         uint256 collateralPrice; // price of 1 asset() in dToken (1e18-scaled)
     }
     
-
     /// @param _asset ERC-4626 underlying, e.g. WETH (collateral token C).
     /// @param _name ERC-20 name for the vault shares.
     /// @param _symbol ERC-20 symbol for the vault shares.
@@ -83,21 +85,21 @@ contract LeverageVault is ERC4626, Ownable, ILeverageVault, IFlashLoan {
         Ownable(msg.sender)
     {
         require(address(_asset) != address(0), "asset is zero");
-        require(_cEVault != address(0), "CEVAULT is zero");
-        require(_dEVault != address(0), "DEVAULT is zero");
+        require(_cEVault != address(0), "cEVault is zero");
+        require(_dEVault != address(0), "dEVault is zero");
         require(_dToken != address(0), "dToken is zero");
         require(_swapper != address(0), "swapper is zero");
 
         // Collateral EVault must manage the same asset as this ERC4626.
-        require(IEVault(_cEVault).asset() == address(_asset), "CEVAULT asset mismatch");
+        require(IEVault(_cEVault).asset() == address(_asset), "cEVault asset mismatch");
         // Debt EVault must manage the debt token.
-        require(IEVault(_dEVault).asset() == address(_dToken), "DEVAULT asset mismatch");
+        require(IEVault(_dEVault).asset() == address(_dToken), "dEVault asset mismatch");
 
-        CEVAULT = IEVault(_cEVault);
-        DEVAULT = IEVault(_dEVault);
+        cEVault = IEVault(_cEVault);
+        dEVault = IEVault(_dEVault);
         dToken = IERC20(_dToken);
         swapper = ISwapper(_swapper);
-        TARGETLEVERAGE = _targetLeverage;
+        targetLeverage = _targetLeverage;
     }
 
 
@@ -131,7 +133,7 @@ contract LeverageVault is ERC4626, Ownable, ILeverageVault, IFlashLoan {
     }
 
 
-    /// @dev Internal hook that rebalances the position to TARGETLEVERAGE.
+    /// @dev Internal hook that rebalances the position to targetLeverage.
     ///      This only computes the required notional and calls the strategy hooks.
     function _rebalanceToTarget() internal {
         VaultState memory s = _getState();
@@ -140,7 +142,9 @@ contract LeverageVault is ERC4626, Ownable, ILeverageVault, IFlashLoan {
         if (s.equityValue == 0) return;
 
         // Compute target assets value: A_target = L* * E
-        uint256 targetAssetsValue = TARGETLEVERAGE * s.equityValue / 1e18;
+        uint256 targetAssetsValue = targetLeverage * s.equityValue / 1e18;
+        console2.log(" targetAssetsValue   :", targetAssetsValue);
+        console2.log(" current assetsValue :", s.assetsValue);
 
         if (targetAssetsValue > s.assetsValue) {
             // Need to increase leverage by "delta" value in dToken units.
@@ -162,9 +166,38 @@ contract LeverageVault is ERC4626, Ownable, ILeverageVault, IFlashLoan {
         if (delta == 0) return;
 
         bytes memory data = abi.encode(delta);
-
-        DEVAULT.flashLoan(delta, data);
+        dEVault.flashLoan(delta, data);
     }
+
+
+    function onFlashLoan(bytes calldata data) external override {
+        require(msg.sender == address(dEVault), "onFlashLoan: not dEVault");
+
+        uint256 delta = abi.decode(data, (uint256));
+
+        if (delta == 0) return;
+
+        // 1) Swap dToken -> asset()
+        dToken.approve(address(swapper), delta);
+        uint256 boughtCollateral = swapper.swapExactInput(
+            address(dToken),
+            address(asset()),
+            delta,
+            0,              // TODO: put a real minAmountOut with slippage
+            address(this)
+        );
+
+        // 2) Deposit asset() in cEVault as collateral
+        IERC20(asset()).approve(address(cEVault), boughtCollateral);
+        cEVault.deposit(boughtCollateral, address(this));
+
+        // 3) Open permanent debt in dEVault for `delta`
+        uint256 borrowed = dEVault.borrow(delta, address(this));
+
+        // 4) Repay the flash loan: send the dToken back to dEVault
+        dToken.safeTransfer(address(dEVault), borrowed);
+    }
+
 
 
     /// @dev Decreases leverage by a notional "delta" denominated in dToken units.
@@ -186,11 +219,11 @@ contract LeverageVault is ERC4626, Ownable, ILeverageVault, IFlashLoan {
         uint256 collateralToWithdraw = delta * 1e18 / s.collateralPrice;
         if (collateralToWithdraw > s.collateral) collateralToWithdraw = s.collateral;
 
-        // 2) Withdraw collateral from CEVAULT to this contract.
-        CEVAULT.withdraw(collateralToWithdraw, address(this), address(this));
+        // 2) Withdraw collateral from cEVault to this contract.
+        cEVault.withdraw(collateralToWithdraw, address(this), address(this));
 
         // 3) Swap asset() -> dToken via the swapper.
-        IERC20(asset()).safeApprove(address(swapper), collateralToWithdraw);
+        IERC20(asset()).approve(address(swapper), collateralToWithdraw);
         uint256 receivedDebtToken = swapper.swapExactInput(
             address(asset()),
             address(dToken),
@@ -201,64 +234,50 @@ contract LeverageVault is ERC4626, Ownable, ILeverageVault, IFlashLoan {
 
         if (receivedDebtToken == 0) return;
 
-        // 4) Repay part of the outstanding debt in DEVAULT.
+        // 4) Repay part of the outstanding debt in dEVault.
         uint256 repayAmount = receivedDebtToken;
         if (repayAmount > s.debt) repayAmount = s.debt;
 
-        dToken.safeApprove(address(DEVAULT), repayAmount);
-        DEVAULT.repay(repayAmount, address(this));
-    }
-
-    function onFlashLoan(bytes calldata data) external override {
-        require(msg.sender == address(DEVAULT), "onFlashLoan: not DEVAULT");
-
-        uint256 delta = abi.decode(data, (uint256));
-
-        if (delta == 0) return;
-
-        // 1) Swap dToken -> asset()
-        dToken.safeApprove(address(swapper), delta);
-        uint256 boughtCollateral = swapper.swapExactInput(
-            address(dToken),
-            address(asset()),
-            delta,
-            0,              // TODO: put a real minAmountOut with slippage
-            address(this)
-        );
-
-        // 2) Deposit asset() in CEVAULT as collateral
-        IERC20(asset()).safeApprove(address(CEVAULT), boughtCollateral);
-        CEVAULT.deposit(boughtCollateral, address(this));
-
-        // 3) Open permanent debt in DEVAULT for `delta`
-        uint256 borrowed = DEVAULT.borrow(delta, address(this));
-
-        // 4) Repay the flash loan: send the dToken back to DEVAULT
-        dToken.safeTransfer(address(DEVAULT), borrowed);
+        dToken.approve(address(dEVault), repayAmount);
+        dEVault.repay(repayAmount, address(this));
     }
 
 
 
     /// @dev Returns collateral amount in underlying asset() units.
     function _collateralAssets() internal view returns (uint256) {
-        uint256 shares = CEVAULT.balanceOf(address(this));
+        uint256 shares = cEVault.balanceOf(address(this));
         if (shares == 0) return 0;
 
         // EVault is ERC4626-compatible, so shares -> assets via convertToAssets
-        return CEVAULT.convertToAssets(shares);
+        return cEVault.convertToAssets(shares);
     }
 
     /// @dev Returns current debt in dToken units.
     function _debt() internal view returns (uint256) {
         // Euler EVault exposes debtOf(account)
-        return DEVAULT.debtOf(address(this));
+        return dEVault.debtOf(address(this));
     }
 
     /// @dev Returns price of 1 unit of collateral (asset()) in dToken units, 1e18-scaled.
     ///      For now stubbed to 1e18 (1:1). 
     function _getPriceCInDebt() internal view returns (uint256) {
-        // TODO: integrate real oracle:
-        return 1e18;
+        address oracle = cEVault.oracle();
+
+        uint8 cDec = ERC20(asset()).decimals();
+        uint8 dDec = ERC20(address(dToken)).decimals();
+    
+        uint256 oneC = 10 ** cDec;
+
+        
+        uint out = IPriceOracle(oracle).getQuote(
+            oneC, 
+            asset(), 
+            address(dToken)
+        );
+
+        // return out scaled to 1e18
+        return out * 1e18 / (10 ** dDec);
     }
 
 
@@ -273,12 +292,12 @@ contract LeverageVault is ERC4626, Ownable, ILeverageVault, IFlashLoan {
         // 1) Let the base ERC4626 handle accounting + pull of assets from caller.
         super._deposit(caller, receiver, assets, shares);
 
-        // 2) Move deposited assets into CEVAULT as collateral.
+        // 2) Move deposited assets into cEVault as collateral.
         // NOTE: We increase allowance instead of setting exact to avoid resetting to 0 each time.
-        IERC20(asset()).approve(address(CEVAULT), assets);
-        CEVAULT.deposit(assets, address(this));
+        IERC20(asset()).approve(address(cEVault), assets);
+        cEVault.deposit(assets, address(this));
 
-        // 3) Rebalance global leverage towards TARGETLEVERAGE.
+        // 3) Rebalance global leverage towards targetLeverage.
         _rebalanceToTarget();
     }
 
@@ -292,12 +311,12 @@ contract LeverageVault is ERC4626, Ownable, ILeverageVault, IFlashLoan {
         uint256 shares
     ) internal override {
         // 1) Unwind proportional position in Euler before burning shares
-        _unwindForWithdraw(assets, shares);
+        _unwindForWithdraw(shares);
 
         super._withdraw(caller, receiver, owner, assets, shares);
     }
 
-    function _unwindForWithdraw(uint256 assets, uint256 shares) internal {
+    function _unwindForWithdraw(uint256 shares) internal {
         if (shares == 0) return;
 
         VaultState memory s = _getState();
@@ -305,38 +324,38 @@ contract LeverageVault is ERC4626, Ownable, ILeverageVault, IFlashLoan {
         // If there is no position, nothing to unwind
         if (s.collateral == 0 || s.debt == 0) return;
 
+        // If underwater, cannot unwind
+        if (s.assetsValue <= s.debt) revert("LeverageVault: vault underwater");
+
+        // else, the vault is solvent, so can pro-rata unwind
+        
         uint256 totalShares = totalSupply();
         if (totalShares == 0) return;
 
-        // r = shares / totalShares (fracción de la posición)
+        // r = shares / totalShares (proportion of the position to unwind)
         // C_user = C * r
         // D_user = D * r
-        uint256 collateralToWithdraw = (s.collateral * shares) / totalShares;
-        uint256 debtToRepay          = (s.debt * shares) / totalShares;
+        uint256 collateralToWithdraw = Math.mulDiv(s.collateral, shares, totalShares);
+        uint256 debtToRepay          = Math.mulDiv(s.debt, shares, totalShares);
 
-        if (collateralToWithdraw == 0 && debtToRepay == 0) {
-            return;
+
+        // 1) Withdraw user's proportional collateral from cEVault
+        if (collateralToWithdraw > 0) { 
+            cEVault.withdraw(collateralToWithdraw, address(this), address(this));
         }
 
-        // 1) Withdraw user's proportional collateral from CEVAULT
-        if (collateralToWithdraw > 0) {
-            CEVAULT.withdraw(collateralToWithdraw, address(this), address(this));
-        }
+        if (debtToRepay == 0) return; // TODO: maybe not needed verification
 
-        if (debtToRepay == 0) return;
-
-        // 2) Compute how much collateral we need to sell to get `debtToRepay` dToken
-        // targetCForDebt ≈ D_user / price
         // price = dToken per 1 asset(), 1e18 scaled
         uint256 price = s.collateralPrice;
         if (price == 0) return;
 
+        // 2) Compute how much collateral we need to sell to get `debtToRepay` dToken
         uint256 collateralForDebt = (debtToRepay * 1e18) / price;
+
         if (collateralForDebt > collateralToWithdraw) {
             collateralForDebt = collateralToWithdraw;
         }
-
-        if (collateralForDebt == 0) return;
 
         // 3) Swap asset() -> dToken to repay that slice of debt
         IERC20(asset()).approve(address(swapper), collateralForDebt);
@@ -348,17 +367,13 @@ contract LeverageVault is ERC4626, Ownable, ILeverageVault, IFlashLoan {
             address(this)
         );
 
-        // If swap fails or returns nothing, abort deleverage for now
-        if (amountOut == 0) return;
+        if (amountOut < debtToRepay) revert("LeverageVault: insufficient swap output to repay debt");
 
         // Repay up to the proportional debt slice
         uint256 repayAmount = amountOut;
-        if (repayAmount > debtToRepay) {
-            repayAmount = debtToRepay;
-        }
 
-        dToken.approve(address(DEVAULT), repayAmount);
-        DEVAULT.repay(repayAmount, address(this));
+        dToken.approve(address(dEVault), repayAmount);
+        dEVault.repay(repayAmount, address(this));
 
         // Note: the collateral we did NOT sell (collateralToWithdraw - collateralForDebt)
         // remains as free asset() in this contract.

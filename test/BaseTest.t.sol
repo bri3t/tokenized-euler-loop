@@ -30,8 +30,8 @@ import {Base} from "euler-vault-kit/src/EVault/shared/Base.sol";
 
 import {EthereumVaultConnector} from "ethereum-vault-connector/EthereumVaultConnector.sol";
 
-import {LeverageStrategy} from "../src/strategy/LeverageStrategy.sol";
-import {ISwapRouterV3} from "../src/interfaces/ISwapRouterV3.sol";
+// Swapper interface for leverage vault tests
+import {MockSwapper} from "../src/mocks/MockSwapper.sol";
 
 /* ------------------------ Mocks --------------------------- */
 import {TestERC20} from "euler-vault-kit/test/mocks/TestERC20.sol";
@@ -71,11 +71,11 @@ contract BaseTest is Test, DeployPermit2 {
                             Tokens + EVaults
        ================================================================ */
 
-    TestERC20 weth;
-    TestERC20 usdc;
+    TestERC20 cToken;
+    TestERC20 dToken;
 
-    IEVault public eVaultWeth;
-    IEVault public eVaultUsdc;
+    IEVault public cEVault;
+    IEVault public dEVault;
 
     address initializeModule;
     address tokenModule;
@@ -87,14 +87,12 @@ contract BaseTest is Test, DeployPermit2 {
     address governanceModule;
 
     /* ================================================================
-                              Strategy and Vault
+                              Leverage Vault
        ================================================================ */
-
-    LeverageStrategy public strategy;
 
     LeverageVault public vault; // In this test, vault = this contract
 
-    ISwapRouterV3 public dummyRouter;
+    address public swapper;
 
     function setUp() public virtual {
         /* ------------------------------
@@ -154,69 +152,68 @@ contract BaseTest is Test, DeployPermit2 {
            Deploy Underlying Assets
         ------------------------------ */
 
-        weth = new TestERC20("Mock WETH", "WETH", 18, false);
-        usdc = new TestERC20("Mock USDC", "USDC", 6, false);
+        cToken = new TestERC20("Mock WETH", "WETH", 18, false);
+        dToken = new TestERC20("Mock USDC", "USDC", 6, false);
 
         /* ------------------------------
-           Create real EVault_WETH
+           Create real cEVault
         ------------------------------ */
 
-        bytes memory wethInit = abi.encodePacked(
-            address(weth),     
+        bytes memory cTokenInit = abi.encodePacked(
+            address(cToken),     
             address(oracle),   
             unitOfAccount      
         );
 
-        eVaultWeth = IEVault(
-            factory.createProxy(address(0), true, wethInit)
+        cEVault = IEVault(
+            factory.createProxy(address(0), true, cTokenInit)
         );
 
-        eVaultWeth.setHookConfig(address(0), 0);
-        eVaultWeth.setInterestRateModel(address(new IRMTestDefault()));
-        eVaultWeth.setMaxLiquidationDiscount(0.2e4);
-        eVaultWeth.setFeeReceiver(feeReceiver);
+        cEVault.setHookConfig(address(0), 0);
+        cEVault.setInterestRateModel(address(new IRMTestDefault()));
+        cEVault.setMaxLiquidationDiscount(0.2e4);
+        cEVault.setFeeReceiver(feeReceiver);
 
         /* ------------------------------
-           Create real EVault_USDC
+           Create real dEVault
         ------------------------------ */
 
-        bytes memory usdcInit = abi.encodePacked(
-            address(usdc),     // underlying
+        bytes memory dTokenInit = abi.encodePacked(
+            address(dToken),     // underlying
             address(oracle),   // priceOracle
             unitOfAccount
         );
 
-        eVaultUsdc = IEVault(
-            factory.createProxy(address(0), true, usdcInit)
+        dEVault = IEVault(
+            factory.createProxy(address(0), true, dTokenInit)
         );
 
-        eVaultUsdc.setHookConfig(address(0), 0);
-        eVaultUsdc.setInterestRateModel(address(new IRMTestDefault()));
-        eVaultUsdc.setMaxLiquidationDiscount(0.2e4);
-        eVaultUsdc.setFeeReceiver(feeReceiver);
+        dToken.mint(address(dEVault), 100_000_000e6); // Pre-fund dEVault with liquidity
 
-        // Deploy Dummy Router (not swapping yet)
-        dummyRouter = ISwapRouterV3(address(0)); // we do not test swaps yet
+        dEVault.setHookConfig(address(0), 0);
+        dEVault.setInterestRateModel(address(new IRMTestDefault()));
+        dEVault.setMaxLiquidationDiscount(0.2e4);
+        dEVault.setFeeReceiver(feeReceiver);
 
-        // Deploy Strategy and Vault
+        // Configure oracle price: 1 cToken = 1 dToken (1e18-scaled)
+        oracle.setPrice(address(cToken), address(dToken), 1e18);
+
+        // Deploy mock swapper (1:1 swaps using TestERC20 mint/transfer)
+        MockSwapper mock = new MockSwapper();
+        swapper = address(mock);
+
         vault = new LeverageVault(
-            IERC20(address(weth)),
-            "Looping ETH Vault 2x",
-            "vETH2x",
-            address(eVaultWeth)
+            IERC20(address(cToken)),
+            "vaultShares",
+            "vSHARES",
+            address(cEVault),
+            address(dEVault),
+            address(dToken),
+            swapper,
+            2e18
         );
 
-        strategy = new LeverageStrategy(
-                    address(weth),
-                    address(usdc),
-                    address(eVaultWeth),
-                    address(eVaultUsdc),
-                    address(dummyRouter),
-                    address(vault),
-                    2e18 // 2x leverage 
-        );
-
-        vault.setStrategy(strategy);
+     
 
        
     }

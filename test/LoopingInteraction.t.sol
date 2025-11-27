@@ -18,88 +18,138 @@ contract LoopingInteraction is BaseTest {
         user1 = makeAddr("user1");
         user2 = makeAddr("user2");
 
-        a1 = 1e18;
-        a2 = 2e18;
+        a1 = 2e18;
+        a2 = 4e18;
 
-        weth.mint(user1, a1);
-        assertEq(weth.balanceOf(user1), a1);
-        weth.mint(user2, a2);
-        assertEq(weth.balanceOf(user2), a2);
-
-
-        // Mint WETH to both users
-        vm.deal(user1, a1);
-        vm.deal(user2, a2);
-        assertEq(user1.balance, a1);
-        assertEq(user2.balance, a2);
+        // Mint collateral token (cToken, acting as WETH) to users
+        cToken.mint(user1, a1);
+        assertEq(cToken.balanceOf(user1), a1);
+        console2.log("user1 cToken balance:", cToken.balanceOf(user1));
+        cToken.mint(user2, a2);
+        assertEq(cToken.balanceOf(user2), a2);
     }
 
-    /// @notice Ensure only the configured vault address can call strategy methods.
-    function test_onlyVault_can_call_strategy() public {
-        address attacker = makeAddr("attacker");
-        uint256 amount = 1 ether;
-
-        // Mint some WETH to the attacker
-        weth.mint(attacker, amount);
-        // Attacker tries to call openPosition directly -> should revert
-        vm.prank(attacker);
-        vm.expectRevert(bytes("Strategy: caller is not vault"));
-        strategy.openPosition(amount);
-
-        // Attacker tries to call closePosition directly -> should revert
-        vm.prank(attacker);
-        vm.expectRevert(bytes("Strategy: caller is not vault"));
-        strategy.closePosition(amount);
-    }
-
-    /// @notice Simulate two users depositing WETH to the vault (the test contract acts as the vault)
-    /// and withdrawing later. This checks interaction between users, the vault and the strategy.
+    /// @notice Basic 2-users deposit/withdraw flow against LeverageVault.
     function test_multiple_users_deposit_and_withdraw() public {
-        
-
-        assertEq(weth.balanceOf(address(strategy)), 0, "Strategy WETH balance should be zero at start");
-
-        // User1 deposits 1 ETH via the looping vault
+        // -----------------------------
+        // 1) user1 deposits a1
+        // -----------------------------
         vm.startPrank(user1);
-        weth.approve(address(vault), a1);
-        vault.deposit(a1, user1);
+
+        // Approve vault to pull cToken
+        cToken.approve(address(vault), a1);
+
+        // Deposit into the leverage vault
+        uint256 user1Shares = vault.deposit(a1, user1);
+
         vm.stopPrank();
 
-        assertEq(weth.balanceOf(user1), 0, "User1 WETH balance should be zero after deposit");
-        assertEq(vault.totalAssets(), a1, "Vault total assets should be a1 after user1 deposit");
+        // After first deposit, since totalSupply was 0, user1Shares == a1
+        assertEq(user1Shares, a1, "user1 shares mismatch after first deposit");
 
-        // Strategy should have deposited into eWeth
-        assertEq(eVaultWeth.balanceOf(address(strategy)), a1);
-
-
-        // User2 deposits 2 ETH via the looping vault
+        // -----------------------------
+        // 2) user2 deposits a2
+        // -----------------------------
         vm.startPrank(user2);
-        weth.approve(address(vault), a2);
-        vault.deposit(a2, user2);
+
+        cToken.approve(address(vault), a2);
+        uint256 user2Shares = vault.deposit(a2, user2);
+
         vm.stopPrank();
 
-        // Strategy now holds both deposits in eWeth 
-        assertEq(eVaultWeth.balanceOf(address(strategy)), a1 + a2);
+        // With ERC4626 math and 1:1 NAV in this ideal setup,
+        // user2Shares should be a2 as well (same share price).
+        assertEq(user2Shares, a2, "user2 shares mismatch after second deposit");
 
-        // Total assets reported by strategy should match eWeth.convertToAssets(shares)
-        uint256 shares = eVaultWeth.balanceOf(address(strategy));
-        uint256 expectedAssets = eVaultWeth.convertToAssets(shares);
-        assertEq(strategy.totalAssets(), expectedAssets);
+        // Total supply == a1 + a2
+        assertEq(vault.totalSupply(), a1 + a2, "total shares mismatch");
 
-        // Now simulate USER1 withdrawing their assets: vault asks strategy to close position
-        vm.prank(user1);
-        vault.withdraw(a1, user1, user1);
+        // -----------------------------
+        // 3) Check basic vault state
+        // -----------------------------
 
-        // Vault should have received WETH back
-        assertEq(user1.balance, a1, "User1 ETH balance should match a1 after withdrawal");
+        // NAV should be approximately a1 + a2 in underlying units
+        uint256 nav = vault.totalAssets();
+        assertApproxEqAbs(nav, a1 + a2, 1, "NAV mismatch after both deposits");
 
-        // Strategy should have reduced its eWeth holdings
-        assertEq(eVaultWeth.balanceOf(address(strategy)), a2, "Strategy eWeth balance should match a2 after user1 withdrawal");
+        // Collateral in cEVault should be > deposited sum because of leverage (target 2x)
+        uint256 cShares = cEVault.balanceOf(address(vault));
+        uint256 cUnderlying = cEVault.convertToAssets(cShares);
+        assertGt(cUnderlying, a1 + a2, "collateral should be levered above raw deposits");
 
-        // Remaining assets on strategy should match a2
-        uint256 remainingShares = eVaultWeth.balanceOf(address(strategy));
-        uint256 remainingAssets = eVaultWeth.convertToAssets(remainingShares);
-        assertEq(strategy.totalAssets(), remainingAssets);
-        assertEq(remainingAssets, a2);
+        // There should be some debt opened in dEVault
+        uint256 vaultDebt = dEVault.debtOf(address(vault));
+        assertGt(vaultDebt, 0, "vault should have some borrow debt after rebalancing");
+
+        // -----------------------------
+        // 4) user1 withdraws everything
+        // -----------------------------
+        vm.startPrank(user1);
+
+        uint256 user1BalanceBefore = cToken.balanceOf(user1);
+
+        // Redeem all user1 shares
+        vault.redeem(user1Shares, user1, user1);
+
+        uint256 user1BalanceAfter = cToken.balanceOf(user1);
+        vm.stopPrank();
+
+        // user1 should have ~a1 back (within 1 wei tolerance)
+        assertApproxEqAbs(
+            user1BalanceAfter,
+            user1BalanceBefore + a1,
+            1,
+            "user1 final cToken balance mismatch"
+        );
+
+        // -----------------------------
+        // 5) user2 withdraws everything
+        // -----------------------------
+        vm.startPrank(user2);
+
+        uint256 user2BalanceBefore = cToken.balanceOf(user2);
+
+        vault.redeem(user2Shares, user2, user2);
+
+        uint256 user2BalanceAfter = cToken.balanceOf(user2);
+        vm.stopPrank();
+
+        // user2 should have ~a2 back (within 1 wei tolerance)
+        assertApproxEqAbs(
+            user2BalanceAfter,
+            user2BalanceBefore + a2,
+            1,
+            "user2 final cToken balance mismatch"
+        );
+
+        // -----------------------------
+        // 6) Final sanity checks
+        // -----------------------------
+
+        // All shares should be burned
+        assertEq(vault.totalSupply(), 0, "vault totalSupply not zero after full exit");
+
+        // Vault should not hold meaningful leftover cToken or dToken
+        assertApproxEqAbs(
+            cToken.balanceOf(address(vault)),
+            0,
+            1,
+            "vault still holds cToken after full exit"
+        );
+
+        assertApproxEqAbs(
+            dToken.balanceOf(address(vault)),
+            0,
+            1,
+            "vault still holds dToken after full exit"
+        );
+
+        // And debt on dEVault should be (almost) zero
+        assertApproxEqAbs(
+            dEVault.debtOf(address(vault)),
+            0,
+            1,
+            "vault still has debt after full exit"
+        );
     }
 }
