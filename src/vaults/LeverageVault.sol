@@ -77,7 +77,6 @@ contract LeverageVault is ERC4626, Ownable, IFlashLoan {
     /// @param _targetLeverage Target leverage (e.g. 5e18 for 5x).
     /// @param _swapper Address of the swapper contract (DEX/router abstraction).
     constructor(
-        IERC20 _asset,
         string memory _name,
         string memory _symbol,
         address _cEVault,
@@ -88,7 +87,7 @@ contract LeverageVault is ERC4626, Ownable, IFlashLoan {
         uint256 _targetLeverage
     )
         ERC20(_name, _symbol)
-        ERC4626(_asset)
+        ERC4626(IERC20(IEVault(_cEVault).asset()))
         Ownable(msg.sender)
     {
         require(address(_asset) != address(0), "asset is zero");
@@ -97,10 +96,6 @@ contract LeverageVault is ERC4626, Ownable, IFlashLoan {
         require(_dToken != address(0), "dToken is zero");
         require(_fEVault != address(0), "fEVault is zero");
         require(_swapper != address(0), "swapper is zero");
-        // Collateral EVault must manage the same asset as this ERC4626.
-        require(IEVault(_cEVault).asset() == address(_asset), "cEVault asset mismatch");
-        // Debt EVault must manage the debt token.
-        require(IEVault(_dEVault).asset() == address(_dToken), "dEVault asset mismatch");
 
         cEVault = IEVault(_cEVault);
         dEVault = IEVault(_dEVault);
@@ -134,7 +129,7 @@ contract LeverageVault is ERC4626, Ownable, IFlashLoan {
         s.equityValue = s.assetsValue - s.debt;
 
         // Leverage L = A / E, 1e18-scaled.
-        s.leverage = (s.equityValue > 0)
+        s.leverage = (s.equityValue != 0)
             ? (s.assetsValue * 1e18 / s.equityValue)
             : 0;
 
