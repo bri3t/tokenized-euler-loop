@@ -74,6 +74,7 @@ contract BaseTest is Test, DeployPermit2 {
     TestERC20 cToken;
     TestERC20 dToken;
 
+    IEVault public fEVault;
     IEVault public cEVault;
     IEVault public dEVault;
 
@@ -155,18 +156,12 @@ contract BaseTest is Test, DeployPermit2 {
         cToken = new TestERC20("Mock WETH", "WETH", 18, false);
         dToken = new TestERC20("Mock USDC", "USDC", 6, false);
 
+       
         /* ------------------------------
            Create real cEVault
         ------------------------------ */
-
-        bytes memory cTokenInit = abi.encodePacked(
-            address(cToken),     
-            address(oracle),   
-            unitOfAccount      
-        );
-
         cEVault = IEVault(
-            factory.createProxy(address(0), true, cTokenInit)
+            factory.createProxy(address(0), true, abi.encodePacked(address(cToken), address(oracle), unitOfAccount))
         );
 
         cEVault.setHookConfig(address(0), 0);
@@ -177,18 +172,11 @@ contract BaseTest is Test, DeployPermit2 {
         /* ------------------------------
            Create real dEVault
         ------------------------------ */
-
-        bytes memory dTokenInit = abi.encodePacked(
-            address(dToken),     // underlying
-            address(oracle),   // priceOracle
-            unitOfAccount
-        );
-
         dEVault = IEVault(
-            factory.createProxy(address(0), true, dTokenInit)
+            factory.createProxy(address(0), true, abi.encodePacked(address(dToken), address(oracle), unitOfAccount))
         );
 
-        dToken.mint(address(dEVault), 100_000_000e6); // Pre-fund dEVault with liquidity
+        dToken.mint(address(dEVault), 100_000_000e18); // Pre-fund dEVault with liquidity
 
         dEVault.setHookConfig(address(0), 0);
         dEVault.setInterestRateModel(address(new IRMTestDefault()));
@@ -197,6 +185,29 @@ contract BaseTest is Test, DeployPermit2 {
 
         // Configure oracle price: 1 cToken = 1 dToken (1e18-scaled)
         oracle.setPrice(address(cToken), address(dToken), 1e18);
+        console2.log(address(vault));
+        evc.enableController(address(vault), address(dEVault));
+        dEVault.setLTV(address(dToken),  0.9e4, 0.9e4, 0);
+
+
+        /* ------------------------------
+           Create real fEVault
+        ------------------------------ */
+        fEVault = IEVault(
+            factory.createProxy(address(0), true, abi.encodePacked(address(dToken), address(oracle), unitOfAccount))
+        );
+
+
+        fEVault.setHookConfig(address(0), 0);
+        fEVault.setInterestRateModel(address(new IRMTestDefault()));
+        fEVault.setMaxLiquidationDiscount(0.2e4);
+        fEVault.setFeeReceiver(feeReceiver);
+
+        evc.enableController(address(vault), address(fEVault));
+
+        dToken.mint(address(fEVault), 100_000_000e18); // Pre-fund fEVault with liquidity
+
+
 
         // Deploy mock swapper (1:1 swaps using TestERC20 mint/transfer)
         MockSwapper mock = new MockSwapper();
@@ -208,6 +219,7 @@ contract BaseTest is Test, DeployPermit2 {
             "vSHARES",
             address(cEVault),
             address(dEVault),
+            address(fEVault),
             address(dToken),
             swapper,
             2e18

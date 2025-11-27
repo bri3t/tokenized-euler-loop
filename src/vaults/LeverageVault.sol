@@ -41,11 +41,16 @@ contract LeverageVault is ERC4626, Ownable, IFlashLoan {
     /// @notice Debt asset (borrow token B).
     IERC20 public immutable dToken;
 
-    /// @notice Euler EVault for debt token (flash + borrow).
-    IEVault public immutable dEVault;
 
     /// @notice Euler EVault for collateral token.
     IEVault public immutable cEVault;
+
+    /// @notice Euler EVault for debt token (flash borrow).
+    IEVault public immutable dEVault;
+
+
+    /// @notice Euler EVault for flash loans of debt token.
+    IEVault public immutable fEVault;
 
 
     ISwapper public immutable swapper;
@@ -68,6 +73,7 @@ contract LeverageVault is ERC4626, Ownable, IFlashLoan {
     /// @param _cEVault Address of the Euler EVault for collateral (asset()).
     /// @param _dEVault Address of the Euler EVault for debt.
     /// @param _dToken Address of the debt token.
+    /// @param _fEVault Address of the Euler EVault for flash loans of debt token.
     /// @param _targetLeverage Target leverage (e.g. 5e18 for 5x).
     /// @param _swapper Address of the swapper contract (DEX/router abstraction).
     constructor(
@@ -76,6 +82,7 @@ contract LeverageVault is ERC4626, Ownable, IFlashLoan {
         string memory _symbol,
         address _cEVault,
         address _dEVault,
+        address _fEVault,
         address _dToken,
         address _swapper,
         uint256 _targetLeverage
@@ -88,8 +95,8 @@ contract LeverageVault is ERC4626, Ownable, IFlashLoan {
         require(_cEVault != address(0), "cEVault is zero");
         require(_dEVault != address(0), "dEVault is zero");
         require(_dToken != address(0), "dToken is zero");
+        require(_fEVault != address(0), "fEVault is zero");
         require(_swapper != address(0), "swapper is zero");
-
         // Collateral EVault must manage the same asset as this ERC4626.
         require(IEVault(_cEVault).asset() == address(_asset), "cEVault asset mismatch");
         // Debt EVault must manage the debt token.
@@ -98,6 +105,7 @@ contract LeverageVault is ERC4626, Ownable, IFlashLoan {
         cEVault = IEVault(_cEVault);
         dEVault = IEVault(_dEVault);
         dToken = IERC20(_dToken);
+        fEVault = IEVault(_fEVault);
         swapper = ISwapper(_swapper);
         targetLeverage = _targetLeverage;
     }
@@ -113,7 +121,6 @@ contract LeverageVault is ERC4626, Ownable, IFlashLoan {
             // Everything stays zero, leverage = 0
             return s;
         }
-
         // Collateral value in dToken units.
         s.assetsValue = s.collateral * s.collateralPrice / 1e18;
 
@@ -130,6 +137,14 @@ contract LeverageVault is ERC4626, Ownable, IFlashLoan {
         s.leverage = (s.equityValue > 0)
             ? (s.assetsValue * 1e18 / s.equityValue)
             : 0;
+
+        console2.log(" Vault State:");
+        console2.log("  collateral       :", s.collateral);
+        console2.log("  debt             :", s.debt);
+        console2.log("  assetsValue      :", s.assetsValue);
+        console2.log("  equityValue      :", s.equityValue);
+        console2.log("  leverage         :", s.leverage);
+        console2.log("  collateralPrice  :", s.collateralPrice);
     }
 
 
@@ -143,8 +158,6 @@ contract LeverageVault is ERC4626, Ownable, IFlashLoan {
 
         // Compute target assets value: A_target = L* * E
         uint256 targetAssetsValue = targetLeverage * s.equityValue / 1e18;
-        console2.log(" targetAssetsValue   :", targetAssetsValue);
-        console2.log(" current assetsValue :", s.assetsValue);
 
         if (targetAssetsValue > s.assetsValue) {
             // Need to increase leverage by "delta" value in dToken units.
@@ -166,12 +179,12 @@ contract LeverageVault is ERC4626, Ownable, IFlashLoan {
         if (delta == 0) return;
 
         bytes memory data = abi.encode(delta);
-        dEVault.flashLoan(delta, data);
+        fEVault.flashLoan(delta, data);
     }
 
 
     function onFlashLoan(bytes calldata data) external override {
-        require(msg.sender == address(dEVault), "onFlashLoan: not dEVault");
+        require(msg.sender == address(fEVault), "onFlashLoan: not fEVault");
 
         uint256 delta = abi.decode(data, (uint256));
 
@@ -263,21 +276,14 @@ contract LeverageVault is ERC4626, Ownable, IFlashLoan {
     ///      For now stubbed to 1e18 (1:1). 
     function _getPriceCInDebt() internal view returns (uint256) {
         address oracle = cEVault.oracle();
-
-        uint8 cDec = ERC20(asset()).decimals();
-        uint8 dDec = ERC20(address(dToken)).decimals();
-    
-        uint256 oneC = 10 ** cDec;
-
         
         uint out = IPriceOracle(oracle).getQuote(
-            oneC, 
+            1e18, 
             asset(), 
             address(dToken)
         );
 
-        // return out scaled to 1e18
-        return out * 1e18 / (10 ** dDec);
+        return out;
     }
 
 
