@@ -30,7 +30,7 @@ import {Base} from "euler-vault-kit/src/EVault/shared/Base.sol";
 
 import {EthereumVaultConnector} from "ethereum-vault-connector/EthereumVaultConnector.sol";
 
-import {EulerETHLeverageStrategy} from "../src/strategy/EulerETHLeverageStrategy.sol";
+import {LeverageStrategy} from "../src/strategy/LeverageStrategy.sol";
 import {ISwapRouterV3} from "../src/interfaces/ISwapRouterV3.sol";
 
 /* ------------------------ Mocks --------------------------- */
@@ -42,7 +42,7 @@ import {SequenceRegistry} from "euler-vault-kit/src/SequenceRegistry/SequenceReg
 
 
 
-import {LoopingVault} from "../src/vaults/LoopingVault.sol";
+import {LeverageVault} from "../src/vaults/LeverageVault.sol";
 
 contract BaseTest is Test, DeployPermit2 {
 
@@ -90,9 +90,9 @@ contract BaseTest is Test, DeployPermit2 {
                               Strategy and Vault
        ================================================================ */
 
-    EulerETHLeverageStrategy public strategy;
+    LeverageStrategy public strategy;
 
-    LoopingVault public vault; // In this test, vault = this contract
+    LeverageVault public vault; // In this test, vault = this contract
 
     ISwapRouterV3 public dummyRouter;
 
@@ -199,13 +199,14 @@ contract BaseTest is Test, DeployPermit2 {
         dummyRouter = ISwapRouterV3(address(0)); // we do not test swaps yet
 
         // Deploy Strategy and Vault
-        vault = new LoopingVault(
+        vault = new LeverageVault(
             IERC20(address(weth)),
             "Looping ETH Vault 2x",
-            "vETH2x"
+            "vETH2x",
+            address(eVaultWeth)
         );
 
-        strategy = new EulerETHLeverageStrategy(
+        strategy = new LeverageStrategy(
                     address(weth),
                     address(usdc),
                     address(eVaultWeth),

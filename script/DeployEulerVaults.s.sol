@@ -6,7 +6,7 @@ import "forge-std/console2.sol";
 
 import {ProtocolConfig} from "euler-vault-kit/src/ProtocolConfig/ProtocolConfig.sol";
 import {EVault} from "euler-vault-kit/src/EVault/EVault.sol";
-import {IEVault, IERC20} from "euler-vault-kit/src/EVault/IEVault.sol";
+import {IEVault} from "euler-vault-kit/src/EVault/IEVault.sol";
 import {GenericFactory} from "euler-vault-kit/src/GenericFactory/GenericFactory.sol";
 
 import {Dispatch} from "euler-vault-kit/src/EVault/Dispatch.sol";
