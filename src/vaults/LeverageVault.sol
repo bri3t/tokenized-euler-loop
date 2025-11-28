@@ -66,8 +66,9 @@ contract LeverageVault is ERC4626, Ownable, IFlashLoan {
         uint256 leverage;        // A / E, 1e18-scaled (0 if E==0)
         uint256 collateralPrice; // price of 1 asset() in dToken (1e18-scaled)
     }
+
+    error E_ZeroAddress();
     
-    /// @param _asset ERC-4626 underlying, e.g. WETH (collateral token C).
     /// @param _name ERC-20 name for the vault shares.
     /// @param _symbol ERC-20 symbol for the vault shares.
     /// @param _cEVault Address of the Euler EVault for collateral (asset()).
@@ -90,12 +91,11 @@ contract LeverageVault is ERC4626, Ownable, IFlashLoan {
         ERC4626(IERC20(IEVault(_cEVault).asset()))
         Ownable(msg.sender)
     {
-        require(address(_asset) != address(0), "asset is zero");
-        require(_cEVault != address(0), "cEVault is zero");
-        require(_dEVault != address(0), "dEVault is zero");
-        require(_dToken != address(0), "dToken is zero");
-        require(_fEVault != address(0), "fEVault is zero");
-        require(_swapper != address(0), "swapper is zero");
+        if ( _cEVault == address(0) || 
+             _dEVault == address(0) || 
+             _dToken  == address(0) ||
+             _fEVault == address(0) || 
+             _swapper == address(0))revert E_ZeroAddress();
 
         cEVault = IEVault(_cEVault);
         dEVault = IEVault(_dEVault);
@@ -133,13 +133,6 @@ contract LeverageVault is ERC4626, Ownable, IFlashLoan {
             ? (s.assetsValue * 1e18 / s.equityValue)
             : 0;
 
-        console2.log(" Vault State:");
-        console2.log("  collateral       :", s.collateral);
-        console2.log("  debt             :", s.debt);
-        console2.log("  assetsValue      :", s.assetsValue);
-        console2.log("  equityValue      :", s.equityValue);
-        console2.log("  leverage         :", s.leverage);
-        console2.log("  collateralPrice  :", s.collateralPrice);
     }
 
 
@@ -171,7 +164,6 @@ contract LeverageVault is ERC4626, Ownable, IFlashLoan {
 
     /// @dev Increases leverage by a notional "delta" denominated in dToken units.
     function _increaseLeverage(uint256 delta) internal {
-        if (delta == 0) return;
 
         bytes memory data = abi.encode(delta);
         fEVault.flashLoan(delta, data);
@@ -240,7 +232,6 @@ contract LeverageVault is ERC4626, Ownable, IFlashLoan {
             address(this)
         );
 
-        if (receivedDebtToken == 0) return;
 
         // 4) Repay part of the outstanding debt in dEVault.
         uint256 repayAmount = receivedDebtToken;
@@ -255,7 +246,6 @@ contract LeverageVault is ERC4626, Ownable, IFlashLoan {
     /// @dev Returns collateral amount in underlying asset() units.
     function _collateralAssets() internal view returns (uint256) {
         uint256 shares = cEVault.balanceOf(address(this));
-        if (shares == 0) return 0;
 
         // EVault is ERC4626-compatible, so shares -> assets via convertToAssets
         return cEVault.convertToAssets(shares);
@@ -269,6 +259,7 @@ contract LeverageVault is ERC4626, Ownable, IFlashLoan {
 
     /// @dev Returns price of 1 unit of collateral (asset()) in dToken units, 1e18-scaled.
     ///      For now stubbed to 1e18 (1:1). 
+    // TODO: ensure out is in correct decimals
     function _getPriceCInDebt() internal view returns (uint256) {
         address oracle = cEVault.oracle();
         

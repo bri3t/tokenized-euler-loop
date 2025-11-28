@@ -186,7 +186,6 @@ contract BaseTest is Test, DeployPermit2 {
         // Configure oracle price: 1 cToken = 1 dToken (1e18-scaled)
         oracle.setPrice(address(cToken), address(dToken), 1e18);
         console2.log(address(vault));
-        evc.enableController(address(vault), address(dEVault));
         dEVault.setLTV(address(dToken),  0.9e4, 0.9e4, 0);
 
 
@@ -203,7 +202,6 @@ contract BaseTest is Test, DeployPermit2 {
         fEVault.setMaxLiquidationDiscount(0.2e4);
         fEVault.setFeeReceiver(feeReceiver);
 
-        evc.enableController(address(vault), address(fEVault));
 
         dToken.mint(address(fEVault), 100_000_000e18); // Pre-fund fEVault with liquidity
 
@@ -214,7 +212,6 @@ contract BaseTest is Test, DeployPermit2 {
         swapper = address(mock);
 
         vault = new LeverageVault(
-            IERC20(address(cToken)),
             "vaultShares",
             "vSHARES",
             address(cEVault),
@@ -225,6 +222,11 @@ contract BaseTest is Test, DeployPermit2 {
             2e18
         );
 
+        // vm.startPrank(admin);
+        evc.enableController(address(vault), address(cEVault));
+        evc.enableController(address(vault), address(dEVault));
+        evc.enableController(address(vault), address(fEVault));
+        // vm.stopPrank();
      
 
        
