@@ -41,7 +41,6 @@ import {IRMTestDefault} from "euler-vault-kit/test/mocks/IRMTestDefault.sol";
 import {SequenceRegistry} from "euler-vault-kit/src/SequenceRegistry/SequenceRegistry.sol";
 
 
-
 import {LeverageVault} from "../src/vaults/LeverageVault.sol";
 
 contract BaseTest is Test, DeployPermit2 {
@@ -87,6 +86,9 @@ contract BaseTest is Test, DeployPermit2 {
     address balanceForwarderModule;
     address governanceModule;
 
+
+uint32 constant OP_BORROW = 1 << 6;
+        address constant CHECKACCOUNT_CALLER = address(1);
     /* ================================================================
                               Leverage Vault
        ================================================================ */
@@ -185,7 +187,7 @@ contract BaseTest is Test, DeployPermit2 {
 
         // Configure oracle price: 1 cToken = 1 dToken (1e18-scaled)
         oracle.setPrice(address(cToken), address(dToken), 1e18);
-        console2.log(address(vault));
+        oracle.setPrice(address(dToken), address(cToken), 1e18);
         dEVault.setLTV(address(dToken),  0.9e4, 0.9e4, 0);
 
 
@@ -203,7 +205,6 @@ contract BaseTest is Test, DeployPermit2 {
         fEVault.setFeeReceiver(feeReceiver);
 
 
-        dToken.mint(address(fEVault), 100_000_000e18); // Pre-fund fEVault with liquidity
 
 
 
@@ -222,11 +223,12 @@ contract BaseTest is Test, DeployPermit2 {
             2e18
         );
 
-        // vm.startPrank(admin);
-        evc.enableController(address(vault), address(cEVault));
+        vm.startPrank(address(vault));
+        // evc.enableController(address(vault), address(cEVault));
         evc.enableController(address(vault), address(dEVault));
-        evc.enableController(address(vault), address(fEVault));
-        // vm.stopPrank();
+        evc.enableCollateral(address(vault), address(dEVault));
+        // evc.enableController(address(vault), address(fEVault));
+        vm.stopPrank();
      
 
        

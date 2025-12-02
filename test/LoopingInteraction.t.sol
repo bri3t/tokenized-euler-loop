@@ -8,6 +8,7 @@ contract LoopingInteraction is BaseTest {
 
     address user1;
     address user2;
+    address depositor;
 
     uint256 a1;
     uint256 a2;
@@ -17,6 +18,7 @@ contract LoopingInteraction is BaseTest {
 
         user1 = makeAddr("user1");
         user2 = makeAddr("user2");
+        depositor = makeAddr("depositor");
 
         a1 = 2e18;
         a2 = 4e18;
@@ -27,6 +29,22 @@ contract LoopingInteraction is BaseTest {
         console2.log("user1 cToken balance:", cToken.balanceOf(user1));
         cToken.mint(user2, a2);
         assertEq(cToken.balanceOf(user2), a2);
+
+        startHoax(depositor);
+
+        dToken.mint(depositor, type(uint256).max);
+        dToken.approve(address(dEVault), type(uint256).max);
+        dEVault.deposit(100_000_000e18, depositor);
+
+        dToken.approve(address(fEVault), type(uint256).max);
+        fEVault.deposit(100_000_000e18, depositor);
+        vm.stopPrank();
+
+        vm.startPrank(address(vault));
+        evc.enableCollateral(address(vault), address(cEVault));
+        evc.enableController(address(vault), address(dEVault));
+        vm.stopPrank();
+
     }
 
     /// @notice Basic 2-users deposit/withdraw flow against LeverageVault.
