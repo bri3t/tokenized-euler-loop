@@ -185,10 +185,11 @@ uint32 constant OP_BORROW = 1 << 6;
         dEVault.setMaxLiquidationDiscount(0.2e4);
         dEVault.setFeeReceiver(feeReceiver);
 
-        // Configure oracle price: 1 cToken = 1 dToken (1e18-scaled)
-        oracle.setPrice(address(cToken), address(dToken), 1e18);
-        oracle.setPrice(address(dToken), address(cToken), 1e18);
-        dEVault.setLTV(address(dToken),  0.9e4, 0.9e4, 0);
+        // Configure oracle prices relative to unitOfAccount (required by RiskManager checks)
+        oracle.setPrice(address(cToken), unitOfAccount, 1e18);
+        oracle.setPrice(address(dToken), unitOfAccount, 1e18);
+        // Allow borrowing from dEVault using cEVault as collateral
+        dEVault.setLTV(address(cEVault), 0.9e4, 0.9e4, 0);
 
 
         /* ------------------------------
@@ -223,11 +224,10 @@ uint32 constant OP_BORROW = 1 << 6;
             2e18
         );
 
+        // Enable vault as controller on borrow EVault and set cEVault as collateral
         vm.startPrank(address(vault));
-        // evc.enableController(address(vault), address(cEVault));
         evc.enableController(address(vault), address(dEVault));
-        evc.enableCollateral(address(vault), address(dEVault));
-        // evc.enableController(address(vault), address(fEVault));
+        evc.enableCollateral(address(vault), address(cEVault));
         vm.stopPrank();
      
 

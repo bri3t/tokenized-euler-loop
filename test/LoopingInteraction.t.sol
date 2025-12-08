@@ -62,6 +62,7 @@ contract LoopingInteraction is BaseTest {
 
         vm.stopPrank();
 
+        console.log(vault.totalSupply());
         // After first deposit, since totalSupply was 0, user1Shares == a1
         assertEq(user1Shares, a1, "user1 shares mismatch after first deposit");
 
@@ -74,6 +75,7 @@ contract LoopingInteraction is BaseTest {
         uint256 user2Shares = vault.deposit(a2, user2);
 
         vm.stopPrank();
+        console.log(vault.totalSupply());
 
         // With ERC4626 math and 1:1 NAV in this ideal setup,
         // user2Shares should be a2 as well (same share price).
