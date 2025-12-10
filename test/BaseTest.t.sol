@@ -156,7 +156,7 @@ uint32 constant OP_BORROW = 1 << 6;
         ------------------------------ */
 
         cToken = new TestERC20("Mock WETH", "WETH", 18, false);
-        dToken = new TestERC20("Mock USDC", "USDC", 6, false);
+        dToken = new TestERC20("Mock USDC", "USDC", 18, false);
 
        
         /* ------------------------------
@@ -186,7 +186,9 @@ uint32 constant OP_BORROW = 1 << 6;
         dEVault.setFeeReceiver(feeReceiver);
 
         // Configure oracle prices relative to unitOfAccount (required by RiskManager checks)
-        oracle.setPrice(address(cToken), unitOfAccount, 1e18);
+        // 1 wETH = 3000 UoA
+        oracle.setPrice(address(cToken), unitOfAccount, 3000e18);
+        // 1 USDC = 1 UoA
         oracle.setPrice(address(dToken), unitOfAccount, 1e18);
         // Allow borrowing from dEVault using cEVault as collateral
         dEVault.setLTV(address(cEVault), 0.9e4, 0.9e4, 0);
@@ -206,11 +208,7 @@ uint32 constant OP_BORROW = 1 << 6;
         fEVault.setFeeReceiver(feeReceiver);
 
 
-
-
-
-        // Deploy mock swapper (1:1 swaps using TestERC20 mint/transfer)
-        MockSwapper mock = new MockSwapper();
+        MockSwapper mock = new MockSwapper(address(oracle), unitOfAccount);
         swapper = address(mock);
 
         vault = new LeverageVault(
