@@ -4,6 +4,11 @@ out = "out"
 libs = ["lib"]
 via_ir = true
 
+[profile.default.invariant]
+runs = 512          
+depth = 500       
+fail_on_revert = false
+
 [rpc_endpoints]
 base_mainnet = "${ALCHEMY_BASE_MAINNET}"
 

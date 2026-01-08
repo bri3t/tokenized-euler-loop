@@ -6,7 +6,6 @@ import "forge-std/Test.sol";
 import "forge-std/console2.sol";
 import {DeployPermit2} from "permit2/test/utils/DeployPermit2.sol";
 
-
 /* ------------------------ EVK Core Imports --------------------------- */
 import {EVault} from "euler-vault-kit/src/EVault/EVault.sol";
 import {GenericFactory} from "euler-vault-kit/src/GenericFactory/GenericFactory.sol";
@@ -22,7 +21,6 @@ import {BalanceForwarder} from "euler-vault-kit/src/EVault/modules/BalanceForwar
 import {Governance} from "euler-vault-kit/src/EVault/modules/Governance.sol";
 import {RiskManager} from "euler-vault-kit/src/EVault/modules/RiskManager.sol";
 
-
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {IEVault} from "euler-vault-kit/src/EVault/IEVault.sol";
 import {TypesLib} from "euler-vault-kit/src/EVault/shared/types/Types.sol";
@@ -31,7 +29,8 @@ import {Base} from "euler-vault-kit/src/EVault/shared/Base.sol";
 import {EthereumVaultConnector} from "ethereum-vault-connector/EthereumVaultConnector.sol";
 
 // Swapper interface for leverage vault tests
-import {MockSwapper} from "../src/mocks/MockSwapper.sol";
+import {MockSwapRouterV3} from "./mocks/MockSwapRouterV3.sol";
+import "@uniswap/v3-periphery/contracts/interfaces/ISwapRouter.sol";
 
 /* ------------------------ Mocks --------------------------- */
 import {TestERC20} from "euler-vault-kit/test/mocks/TestERC20.sol";
@@ -40,11 +39,9 @@ import {MockPriceOracle} from "euler-vault-kit/test/mocks/MockPriceOracle.sol";
 import {IRMTestDefault} from "euler-vault-kit/test/mocks/IRMTestDefault.sol";
 import {SequenceRegistry} from "euler-vault-kit/src/SequenceRegistry/SequenceRegistry.sol";
 
-
 import {LeverageVault} from "../src/vaults/LeverageVault.sol";
 
 contract BaseTest is Test, DeployPermit2 {
-
     /* ================================================================
                              EVK State
        ================================================================ */
@@ -70,8 +67,8 @@ contract BaseTest is Test, DeployPermit2 {
                             Tokens + EVaults
        ================================================================ */
 
-    TestERC20 cToken;
-    TestERC20 dToken;
+    TestERC20 public cToken;
+    TestERC20 public dToken;
 
     IEVault public fEVault;
     IEVault public cEVault;
@@ -86,9 +83,8 @@ contract BaseTest is Test, DeployPermit2 {
     address balanceForwarderModule;
     address governanceModule;
 
-
-uint32 constant OP_BORROW = 1 << 6;
-        address constant CHECKACCOUNT_CALLER = address(1);
+    uint32 constant OP_BORROW = 1 << 6;
+    address constant CHECKACCOUNT_CALLER = address(1);
     /* ================================================================
                               Leverage Vault
        ================================================================ */
@@ -96,6 +92,7 @@ uint32 constant OP_BORROW = 1 << 6;
     LeverageVault public vault; // In this test, vault = this contract
 
     address public swapper;
+    ISwapRouter public swapRouter;
 
     function setUp() public virtual {
         /* ------------------------------
@@ -115,7 +112,6 @@ uint32 constant OP_BORROW = 1 << 6;
         permit2 = deployPermit2();
         sequenceRegistry = address(new SequenceRegistry());
 
-
         // Build Integrations struct
         integrations = Base.Integrations({
             evc: address(evc),
@@ -126,11 +122,11 @@ uint32 constant OP_BORROW = 1 << 6;
         });
 
         initializeModule = address(new Initialize(integrations));
-        tokenModule      = address(new Token(integrations));
-        vaultModule      = address(new Vault(integrations));
-        borrowingModule  = address(new Borrowing(integrations));
-        liquidationModule= address(new Liquidation(integrations));
-        riskManagerModule= address(new RiskManager(integrations));
+        tokenModule = address(new Token(integrations));
+        vaultModule = address(new Vault(integrations));
+        borrowingModule = address(new Borrowing(integrations));
+        liquidationModule = address(new Liquidation(integrations));
+        riskManagerModule = address(new RiskManager(integrations));
         balanceForwarderModule = address(new BalanceForwarder(integrations));
         governanceModule = address(new Governance(integrations));
 
@@ -158,7 +154,6 @@ uint32 constant OP_BORROW = 1 << 6;
         cToken = new TestERC20("Mock WETH", "WETH", 18, false);
         dToken = new TestERC20("Mock USDC", "USDC", 18, false);
 
-       
         /* ------------------------------
            Create real cEVault
         ------------------------------ */
@@ -178,8 +173,6 @@ uint32 constant OP_BORROW = 1 << 6;
             factory.createProxy(address(0), true, abi.encodePacked(address(dToken), address(oracle), unitOfAccount))
         );
 
-        dToken.mint(address(dEVault), 100_000_000e18); // Pre-fund dEVault with liquidity
-
         dEVault.setHookConfig(address(0), 0);
         dEVault.setInterestRateModel(address(new IRMTestDefault()));
         dEVault.setMaxLiquidationDiscount(0.2e4);
@@ -193,7 +186,6 @@ uint32 constant OP_BORROW = 1 << 6;
         // Allow borrowing from dEVault using cEVault as collateral
         dEVault.setLTV(address(cEVault), 0.9e4, 0.9e4, 0);
 
-
         /* ------------------------------
            Create real fEVault
         ------------------------------ */
@@ -201,15 +193,13 @@ uint32 constant OP_BORROW = 1 << 6;
             factory.createProxy(address(0), true, abi.encodePacked(address(dToken), address(oracle), unitOfAccount))
         );
 
-
         fEVault.setHookConfig(address(0), 0);
         fEVault.setInterestRateModel(address(new IRMTestDefault()));
         fEVault.setMaxLiquidationDiscount(0.2e4);
         fEVault.setFeeReceiver(feeReceiver);
 
-
-        MockSwapper mock = new MockSwapper(address(oracle), unitOfAccount);
-        swapper = address(mock);
+        // Deploy Mock Uniswap V3 SwapRouter
+        swapRouter = ISwapRouter(address(new MockSwapRouterV3(address(oracle), unitOfAccount)));
 
         vault = new LeverageVault(
             "vaultShares",
@@ -218,7 +208,7 @@ uint32 constant OP_BORROW = 1 << 6;
             address(dEVault),
             address(fEVault),
             address(dToken),
-            swapper,
+            swapRouter,
             2e18
         );
 
@@ -227,9 +217,5 @@ uint32 constant OP_BORROW = 1 << 6;
         evc.enableController(address(vault), address(dEVault));
         evc.enableCollateral(address(vault), address(cEVault));
         vm.stopPrank();
-     
-
-       
     }
-
 }

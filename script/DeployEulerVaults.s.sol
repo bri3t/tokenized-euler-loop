@@ -32,7 +32,6 @@ import {SequenceRegistry} from "euler-vault-kit/src/SequenceRegistry/SequenceReg
 import {console2} from "forge-std/console2.sol";
 
 contract DeployEulerVaults is Script {
-
     address public constant WETH = 0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2;
     address public constant USDC = 0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48;
 
@@ -68,9 +67,9 @@ contract DeployEulerVaults is Script {
         // Deploy EVault modules and implementation
 
         Initialize initializeModule = new Initialize(integrations);
-        Token tokenModule           = new Token(integrations);
-        Vault vaultModule           = new Vault(integrations);
-        Borrowing borrowingModule   = new Borrowing(integrations);
+        Token tokenModule = new Token(integrations);
+        Vault vaultModule = new Vault(integrations);
+        Borrowing borrowingModule = new Borrowing(integrations);
         Liquidation liquidationModule = new Liquidation(integrations);
         RiskManager riskManagerModule = new RiskManager(integrations);
         BalanceForwarder balanceForwarderModule = new BalanceForwarder(integrations);
@@ -90,20 +89,14 @@ contract DeployEulerVaults is Script {
         // EVault implementation contract
         EVault evaultImpl = new EVault(integrations, modules);
 
-
         GenericFactory factory = new GenericFactory(admin);
         factory.setImplementation(address(evaultImpl));
 
-
-        bytes memory wethInitData = abi.encodePacked(
-            WETH,
-            address(oracle),
-            unitOfAccount
-        );
+        bytes memory wethInitData = abi.encodePacked(WETH, address(oracle), unitOfAccount);
 
         address eWethProxy = factory.createProxy(
             address(0), // implementation is taken from factory's stored impl
-            true,       // upgradeable (BeaconProxy)
+            true, // upgradeable (BeaconProxy)
             wethInitData
         );
 
@@ -118,17 +111,9 @@ contract DeployEulerVaults is Script {
            Deploy EVault_USDC
            -------------------------------------------------------------- */
 
-        bytes memory usdcInitData = abi.encodePacked(
-            USDC,
-            address(oracle),
-            unitOfAccount
-        );
+        bytes memory usdcInitData = abi.encodePacked(USDC, address(oracle), unitOfAccount);
 
-        address eUsdcProxy = factory.createProxy(
-            address(0),
-            true,
-            usdcInitData
-        );
+        address eUsdcProxy = factory.createProxy(address(0), true, usdcInitData);
 
         IEVault eUsdc = IEVault(eUsdcProxy);
 
@@ -136,7 +121,6 @@ contract DeployEulerVaults is Script {
         eUsdc.setInterestRateModel(address(new IRMTestDefault()));
         eUsdc.setMaxLiquidationDiscount(0.2e4);
         eUsdc.setFeeReceiver(protocolFeeReceiver);
-
 
         console2.log("Admin:           ", admin);
         console2.log("ProtocolConfig:  ", address(protocolConfig));
