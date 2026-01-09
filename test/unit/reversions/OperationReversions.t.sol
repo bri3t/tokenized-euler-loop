@@ -31,7 +31,7 @@ contract OperationReversionsTest is UnitBaseTest {
 
         // Try redeem -> should revert
         vm.startPrank(user);
-        vm.expectRevert(bytes("LeverageVault: invalid price"));
+        vm.expectRevert(bytes("Invalid oracle price"));
         vault.redeem(shares, user, user);
         vm.stopPrank();
     }

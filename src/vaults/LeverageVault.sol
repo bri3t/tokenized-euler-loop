@@ -159,7 +159,7 @@ contract LeverageVault is ERC4626, Ownable, IFlashLoan, ReentrancyGuard {
         } else if (targetAssetsValue < s.assetsValue) {
             // Need to decrease leverage by "delta" value in dToken units.
             delta = s.assetsValue - targetAssetsValue;
-            if (delta > tol) _decreaseLeverage(delta);
+            if (delta > tol) _decreaseLeverage(delta, s);
         } else {
             // Already at exact target, nothing to do.
             return;
@@ -255,10 +255,8 @@ contract LeverageVault is ERC4626, Ownable, IFlashLoan, ReentrancyGuard {
     }
 
     /// @dev Decreases leverage by a notional "delta" denominated in dToken units (native smallest units).
-    function _decreaseLeverage(uint256 delta) internal {
+    function _decreaseLeverage(uint256 delta, VaultState memory s) internal {
         if (delta == 0) return;
-
-        VaultState memory s = _getState();
 
         // If there is no collateral or no debt, nothing to do.
         if (s.collateral == 0 || s.debt == 0) return;
