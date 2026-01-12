@@ -106,7 +106,9 @@ contract LoopHandler is Test {
         vm.startPrank(actor);
         cToken.approve(address(vault), amount);
 
-        try vault.deposit(amount, actor) returns (uint256 /*shares*/) {
+        try vault.deposit(amount, actor) returns (
+            uint256 /*shares*/
+        ) {
             ghostDeposited[actor] += amount;
             ghostTotalDeposited += amount;
         } catch {}
@@ -162,22 +164,10 @@ contract LoopHandler is Test {
         prevDPrice = lastDPrice;
 
         // Note: oracle interface IPriceOracle doesn't include setPrice, this is a mock.
-        (bool ok1, ) = address(oracle).call(
-            abi.encodeWithSignature(
-                "setPrice(address,address,uint256)",
-                address(cToken),
-                unitOfAccount,
-                cPrice
-            )
-        );
-        (bool ok2, ) = address(oracle).call(
-            abi.encodeWithSignature(
-                "setPrice(address,address,uint256)",
-                address(dToken),
-                unitOfAccount,
-                dPrice
-            )
-        );
+        (bool ok1,) = address(oracle)
+            .call(abi.encodeWithSignature("setPrice(address,address,uint256)", address(cToken), unitOfAccount, cPrice));
+        (bool ok2,) = address(oracle)
+            .call(abi.encodeWithSignature("setPrice(address,address,uint256)", address(dToken), unitOfAccount, dPrice));
         // If calls fail, do nothing, continues.
         if (ok1 && ok2) {
             lastCPrice = cPrice;
@@ -208,12 +198,8 @@ contract LoopHandler is Test {
         if (!deltaOk) return;
 
         uint256 target = vault.targetLeverage();
-        uint256 beforeDist = beforeLev > target
-            ? beforeLev - target
-            : target - beforeLev;
-        uint256 afterDist = afterLev > target
-            ? afterLev - target
-            : target - afterLev;
+        uint256 beforeDist = beforeLev > target ? beforeLev - target : target - beforeLev;
+        uint256 afterDist = afterLev > target ? afterLev - target : target - afterLev;
 
         if (beforeDist == 0) return;
 
@@ -250,25 +236,15 @@ contract LoopHandler is Test {
     }
 
     function _currentLeverage() internal view returns (uint256) {
-        uint256 collateral = cEVault.convertToAssets(
-            cEVault.balanceOf(address(vault))
-        );
+        uint256 collateral = cEVault.convertToAssets(cEVault.balanceOf(address(vault)));
         uint256 debt = dEVault.debtOf(address(vault));
         if (collateral == 0 && debt == 0) return 0;
 
         address oracleAddr = cEVault.oracle();
         address uoa = cEVault.unitOfAccount();
 
-        uint256 priceAssetInUoA = IPriceOracle(oracleAddr).getQuote(
-            1e18,
-            address(cToken),
-            uoa
-        );
-        uint256 priceDebtInUoA = IPriceOracle(oracleAddr).getQuote(
-            1e18,
-            address(dToken),
-            uoa
-        );
+        uint256 priceAssetInUoA = IPriceOracle(oracleAddr).getQuote(1e18, address(cToken), uoa);
+        uint256 priceDebtInUoA = IPriceOracle(oracleAddr).getQuote(1e18, address(dToken), uoa);
         if (priceDebtInUoA == 0) return 0;
 
         uint256 ratio = (priceAssetInUoA * 1e18) / priceDebtInUoA;
@@ -277,8 +253,7 @@ contract LoopHandler is Test {
         uint256 assetDecimals = ERC20(address(cToken)).decimals();
 
         uint256 priceCInDebt = (ratio * (10 ** debtDecimals)) / 1e18;
-        uint256 assetsValue = (collateral * priceCInDebt) /
-            (10 ** assetDecimals);
+        uint256 assetsValue = (collateral * priceCInDebt) / (10 ** assetDecimals);
 
         if (assetsValue <= debt || assetsValue == 0) return 0;
 

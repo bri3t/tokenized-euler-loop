@@ -97,10 +97,10 @@ contract LeverageVault is ERC4626, Ownable, IFlashLoan, ReentrancyGuard {
         // Validate target leverage against dEVault's LTV configuration
         // This prevents deploying a vault with impossible leverage target
         uint16 ltv = dEVault.LTVBorrow(address(cEVault));
-        if( ltv > 1e4 || ltv == 0 ) {
+        if (ltv > 1e4 || ltv == 0) {
             revert("LeverageVault: invalid LTV");
         }
-        
+
         // Calculate max safe leverage: 1 / (1 - LTV)
         uint256 maxLeverage = (ONE * 1e4) / (1e4 - ltv);
         // change to if revert
@@ -108,7 +108,6 @@ contract LeverageVault is ERC4626, Ownable, IFlashLoan, ReentrancyGuard {
             revert("LeverageVault: target leverage exceeds maximum");
         }
     }
-
 
     /// @dev Returns the current economic state of the vault.
     function _getState() internal view returns (VaultState memory s) {
@@ -173,7 +172,7 @@ contract LeverageVault is ERC4626, Ownable, IFlashLoan, ReentrancyGuard {
     }
 
     function onFlashLoan(bytes calldata data) external override {
-        require(msg.sender == address(fEVault), "onFlashLoan: not fEVault");
+        require(msg.sender == address(fEVault) && _reentrancyGuardEntered(), "onFlashLoan: not fEVault");
 
         (uint8 mode, uint256 delta) = abi.decode(data, (uint8, uint256));
 
@@ -412,7 +411,6 @@ contract LeverageVault is ERC4626, Ownable, IFlashLoan, ReentrancyGuard {
             // Second withdraw: user's equity in the form of asset()
             cEVault.withdraw(assets, address(this), address(this));
         }
-
     }
 
     /// @notice Total underlying assets managed by this vault (NAV), in asset() units.
@@ -449,6 +447,12 @@ contract LeverageVault is ERC4626, Ownable, IFlashLoan, ReentrancyGuard {
         return shares;
     }
 
+    function mint(uint256 shares, address receiver) public override nonReentrant returns (uint256 assets) {
+        assets = super.mint(shares, receiver);
+        if (assets == 0) revert("LeverageVault: zero assets deposited");
+        return assets;
+    }
+
     function withdraw(uint256 assets, address receiver, address owner)
         public
         override
@@ -466,4 +470,6 @@ contract LeverageVault is ERC4626, Ownable, IFlashLoan, ReentrancyGuard {
     {
         return super.redeem(shares, receiver, owner);
     }
+
+
 }

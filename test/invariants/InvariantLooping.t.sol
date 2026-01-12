@@ -34,9 +34,7 @@ contract InvariantLooping is StdInvariant, InvariantBase {
         selectors[2] = handler.act_skewPrices.selector;
         selectors[3] = handler.act_rebalance.selector;
 
-        targetSelector(
-            FuzzSelector({addr: address(handler), selectors: selectors})
-        );
+        targetSelector(FuzzSelector({addr: address(handler), selectors: selectors}));
         targetContract(address(handler));
     }
 
@@ -44,18 +42,12 @@ contract InvariantLooping is StdInvariant, InvariantBase {
 
     /// @dev Successful redeem should not increase debt.
     function invariant_redeemSuccessDoesNotIncreaseDebt() external view {
-        assertTrue(
-            !handler.debtIncreasedOnRedeem(),
-            "debt increased on redeem success"
-        );
+        assertTrue(!handler.debtIncreasedOnRedeem(), "debt increased on redeem success");
     }
 
     /// @dev After successful rebalance, leverage should not diverge further from target.
     function invariant_rebalanceConverges() external view {
-        assertTrue(
-            !handler.leverageDivergedOnRebalance(),
-            "rebalance diverged from target"
-        );
+        assertTrue(!handler.leverageDivergedOnRebalance(), "rebalance diverged from target");
     }
 
     // ==================== ERC4626 INTEGRITY ====================
@@ -76,10 +68,7 @@ contract InvariantLooping is StdInvariant, InvariantBase {
         uint256 lowerBound = (testAmount * 99) / 100;
         uint256 upperBound = (testAmount * 101) / 100;
 
-        assertTrue(
-            backToAssets >= lowerBound && backToAssets <= upperBound,
-            "share conversion inconsistent"
-        );
+        assertTrue(backToAssets >= lowerBound && backToAssets <= upperBound, "share conversion inconsistent");
     }
 
     /// @dev Collateral backing must support all vault shares issued.
@@ -96,10 +85,7 @@ contract InvariantLooping is StdInvariant, InvariantBase {
 
         // The vault's totalAssets represents the equity value in asset terms.
         // Collateral should be >= totalAssets since we have leverage.
-        assertTrue(
-            actualCollateral >= vaultTotalAssets,
-            "collateral < totalAssets: backing insufficient"
-        );
+        assertTrue(actualCollateral >= vaultTotalAssets, "collateral < totalAssets: backing insufficient");
     }
 
     /// @dev Debt reported by dEVault should match internal tracking.
@@ -107,14 +93,11 @@ contract InvariantLooping is StdInvariant, InvariantBase {
         uint256 debt = dEVault.debtOf(address(vault));
 
         // If we have collateral, debt should be reasonable relative to it
-        uint256 collateral = cEVault.convertToAssets(
-            cEVault.balanceOf(address(vault))
-        );
+        uint256 collateral = cEVault.convertToAssets(cEVault.balanceOf(address(vault)));
 
         if (collateral == 0 && debt > 1e12) {
             // No collateral but significant debt = problem
             assertTrue(false, "debt exists without collateral");
         }
     }
-
 }
