@@ -7,6 +7,8 @@ import {IEVault} from "euler-vault-kit/src/EVault/IEVault.sol";
 import {IPriceOracle} from "euler-vault-kit/src/interfaces/IPriceOracle.sol";
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 
+import "forge-std/console2.sol";
+
 import {LeverageVault} from "../../../src/vaults/LeverageVault.sol";
 import {TestERC20} from "euler-vault-kit/test/mocks/TestERC20.sol";
 
@@ -36,6 +38,9 @@ contract LoopHandler is Test {
     /* -------------------- Debug / invariant flags -------------------- */
     bool public debtIncreasedOnRedeem;
     bool public leverageDivergedOnRebalance;
+    bool public ppsDiverged;
+
+    uint256 public lastPps; // assets per 1 share unit
 
     bool public lastRedeemSucceeded;
     bool public lastRebalanceSucceeded;
@@ -80,12 +85,7 @@ contract LoopHandler is Test {
 
     /* --------------------------- Actor utils ------------------------- */
 
-    function numActors() external view returns (uint256) {
-        return actors.length;
-    }
-
     function getActor(uint256 idx) public view returns (address) {
-        if (actors.length == 0) return address(0);
         return actors[idx % actors.length];
     }
 
@@ -106,11 +106,43 @@ contract LoopHandler is Test {
         vm.startPrank(actor);
         cToken.approve(address(vault), amount);
 
+        uint256 beforePps = _pps();
+
         try vault.deposit(amount, actor) returns (
             uint256 /*shares*/
         ) {
             ghostDeposited[actor] += amount;
             ghostTotalDeposited += amount;
+
+            uint256 afterPps = _pps();
+            _checkPps(beforePps, afterPps);
+        } catch {}
+        vm.stopPrank();
+    }
+
+    function act_withdrawFraction(uint256 fractionBps, uint256 idx) external {
+        _pickActor(idx);
+
+        fractionBps = bound(fractionBps, 1, 10_000);
+
+        uint256 shares = vault.balanceOf(actor);
+        if (shares == 0) return;
+
+        uint256 maxAssets = vault.convertToAssets(shares);
+        if (maxAssets == 0) return;
+
+        uint256 toWithdraw = Math.mulDiv(maxAssets, fractionBps, 10_000);
+
+        if (toWithdraw == 0) return;
+
+        vm.startPrank(actor);
+
+        uint256 beforePps = _pps();
+        try vault.withdraw(toWithdraw, actor, actor) returns (uint256 assetsOut) {
+            ghostRedeemed[actor] += assetsOut;
+            ghostTotalRedeemed += assetsOut;
+            uint256 afterPps = _pps();
+            _checkPps(beforePps, afterPps);
         } catch {}
         vm.stopPrank();
     }
@@ -131,30 +163,24 @@ contract LoopHandler is Test {
         vm.startPrank(actor);
         lastRedeemSucceeded = false;
 
+        uint256 beforePps = _pps();
         try vault.redeem(toRedeem, actor, actor) returns (uint256 assetsOut) {
             lastRedeemSucceeded = true;
 
-            // Ghost accounting: track what the actor received
             ghostRedeemed[actor] += assetsOut;
             ghostTotalRedeemed += assetsOut;
-        } catch {
-            // Swallow
-        }
+            uint256 afterPps = _pps();
+            _checkPps(beforePps, afterPps);
+        } catch {}
         vm.stopPrank();
 
         if (lastRedeemSucceeded) {
             uint256 debtAfter = dEVault.debtOf(address(vault));
-
-            // Use a slightly safer epsilon than "2 wei"
-            // - allow tiny dust + tiny accrual quirks
-            uint256 eps = _debtEpsilon(debtBefore);
-            if (debtAfter > debtBefore + eps) {
-                debtIncreasedOnRedeem = true;
-            }
+            if (debtAfter > debtBefore) debtIncreasedOnRedeem = true;
         }
     }
 
-    /// @dev Adversarial action: skew oracle prices. Only include in adversarial campaign.
+    /// @dev Adversarial action: skew oracle prices. Only included in adversarial campaign.
     function act_skewPrices(uint256 cPrice, uint256 dPrice) external {
         // Bounded but still "adversarial"
         cPrice = bound(cPrice, 1e12, 1e20);
@@ -163,7 +189,6 @@ contract LoopHandler is Test {
         prevCPrice = lastCPrice;
         prevDPrice = lastDPrice;
 
-        // Note: oracle interface IPriceOracle doesn't include setPrice, this is a mock.
         (bool ok1,) = address(oracle)
             .call(abi.encodeWithSignature("setPrice(address,address,uint256)", address(cToken), unitOfAccount, cPrice));
         (bool ok2,) = address(oracle)
@@ -176,7 +201,7 @@ contract LoopHandler is Test {
     }
 
     function act_rebalance() external {
-        uint256 beforeLev = _currentLeverage();
+        uint256 beforeLev = vault.currentLeverage();
 
         leverageDivergedOnRebalance = false;
         lastRebalanceSucceeded = false;
@@ -184,12 +209,10 @@ contract LoopHandler is Test {
         // Try rebalance
         try vault.rebalance() {
             lastRebalanceSucceeded = true;
-        } catch {
-            // Swallow
-        }
+        } catch {}
         if (!lastRebalanceSucceeded) return;
 
-        uint256 afterLev = _currentLeverage();
+        uint256 afterLev = vault.currentLeverage();
         lastLeverage = afterLev;
 
         // Heuristic: only consider divergence if price move is "small-ish"
@@ -201,7 +224,7 @@ contract LoopHandler is Test {
         uint256 beforeDist = beforeLev > target ? beforeLev - target : target - beforeLev;
         uint256 afterDist = afterLev > target ? afterLev - target : target - afterLev;
 
-        if (beforeDist == 0) return;
+        // if (beforeDist == 0) return;
 
         uint256 tol = beforeDist / 20; // 5%
         if (tol == 0) tol = 1;
@@ -214,50 +237,40 @@ contract LoopHandler is Test {
 
     /* --------------------------- Helpers ----------------------------- */
 
+    function _pps() internal view returns (uint256) {
+        if (vault.totalSupply() == 0) return 0;
+        uint256 oneShare = 10 ** vault.decimals();
+        return vault.convertToAssets(oneShare);
+    }
+
+    function _checkPps(uint256 beforePps, uint256 afterPps) internal {
+        // Establish a baseline on the first non-zero PPS observation.
+        if (beforePps == 0) {
+            lastPps = afterPps;
+            return;
+        }
+
+        // Allow tiny rounding dust (relative tolerance).
+        uint256 eps = beforePps / 1e12; // 1e-12 relative
+        if (eps == 0) eps = 1;
+
+        uint256 diff = afterPps > beforePps ? afterPps - beforePps : beforePps - afterPps;
+        if (diff > eps && vault.totalSupply() > 0) {
+            ppsDiverged = true;
+        }
+
+        lastPps = afterPps;
+    }
+
     function _deltaOk20pct() internal view returns (bool) {
         if (prevCPrice == 0 || prevDPrice == 0) return false;
-        uint256 cP = lastCPrice;
-        uint256 dP = lastDPrice;
 
-        uint256 cDelta = cP > prevCPrice ? cP - prevCPrice : prevCPrice - cP;
-        uint256 dDelta = dP > prevDPrice ? dP - prevDPrice : prevDPrice - dP;
+        uint256 cDelta = lastCPrice > prevCPrice ? lastCPrice - prevCPrice : prevCPrice - lastCPrice;
+        uint256 dDelta = lastDPrice > prevDPrice ? lastDPrice - prevDPrice : prevDPrice - lastDPrice;
 
         uint256 cRel = (cDelta * 1e18) / prevCPrice;
         uint256 dRel = (dDelta * 1e18) / prevDPrice;
 
         return (cRel <= 2e17) && (dRel <= 2e17);
-    }
-
-    function _debtEpsilon(uint256 debtBefore) internal pure returns (uint256) {
-        uint256 absDust = 1e6; // 1e6 wei of debt token
-        uint256 relDust = debtBefore / 1e12; // 1e-12 relative
-        if (relDust < absDust) return absDust;
-        return relDust;
-    }
-
-    function _currentLeverage() internal view returns (uint256) {
-        uint256 collateral = cEVault.convertToAssets(cEVault.balanceOf(address(vault)));
-        uint256 debt = dEVault.debtOf(address(vault));
-        if (collateral == 0 && debt == 0) return 0;
-
-        address oracleAddr = cEVault.oracle();
-        address uoa = cEVault.unitOfAccount();
-
-        uint256 priceAssetInUoA = IPriceOracle(oracleAddr).getQuote(1e18, address(cToken), uoa);
-        uint256 priceDebtInUoA = IPriceOracle(oracleAddr).getQuote(1e18, address(dToken), uoa);
-        if (priceDebtInUoA == 0) return 0;
-
-        uint256 ratio = (priceAssetInUoA * 1e18) / priceDebtInUoA;
-
-        uint256 debtDecimals = ERC20(address(dToken)).decimals();
-        uint256 assetDecimals = ERC20(address(cToken)).decimals();
-
-        uint256 priceCInDebt = (ratio * (10 ** debtDecimals)) / 1e18;
-        uint256 assetsValue = (collateral * priceCInDebt) / (10 ** assetDecimals);
-
-        if (assetsValue <= debt || assetsValue == 0) return 0;
-
-        uint256 equityValue = assetsValue - debt;
-        return (assetsValue * 1e18) / equityValue;
     }
 }

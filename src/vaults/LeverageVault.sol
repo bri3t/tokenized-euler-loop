@@ -123,7 +123,7 @@ contract LeverageVault is ERC4626, Ownable, IFlashLoan, ReentrancyGuard {
         s.assetsValue = (s.collateral * s.collateralPrice) / (10 ** ERC20(asset()).decimals());
 
         if (s.assetsValue <= s.debt) {
-            // Underwater or zero equity: equity = 0, leverage = 0 (from our POV).
+            // Underwater or zero equity: equity = 0, leverage = 0
             s.equityValue = 0;
             s.leverage = 0;
             return s;
@@ -133,6 +133,11 @@ contract LeverageVault is ERC4626, Ownable, IFlashLoan, ReentrancyGuard {
 
         // Leverage L = A / E, 1e18-scaled.
         s.leverage = (s.equityValue != 0) ? ((s.assetsValue * ONE) / s.equityValue) : 0;
+    }
+
+    function currentLeverage() external view returns (uint256) {
+        VaultState memory s = _getState();
+        return s.leverage;
     }
 
     /// @dev Internal hook that rebalances the position to targetLeverage.
@@ -470,6 +475,4 @@ contract LeverageVault is ERC4626, Ownable, IFlashLoan, ReentrancyGuard {
     {
         return super.redeem(shares, receiver, owner);
     }
-
-
 }

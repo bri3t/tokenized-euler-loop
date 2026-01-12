@@ -3,13 +3,14 @@ pragma solidity ^0.8.20;
 
 import {StdInvariant} from "forge-std/StdInvariant.sol";
 import "forge-std/Test.sol";
+import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 
 import {InvariantBase} from "./InvariantBase.t.sol";
 import {LoopHandler} from "./handlers/LoopHandler.t.sol";
 
 import {IPriceOracle} from "euler-vault-kit/src/interfaces/IPriceOracle.sol";
 
-contract InvariantLooping is StdInvariant, InvariantBase {
+contract InvariantLoopingStable is StdInvariant, InvariantBase {
     LoopHandler internal handler;
 
     function setUp() public override {
@@ -28,11 +29,10 @@ contract InvariantLooping is StdInvariant, InvariantBase {
 
         handler = new LoopHandler(r, _actors());
 
-        bytes4[] memory selectors = new bytes4[](4);
+        bytes4[] memory selectors = new bytes4[](3);
         selectors[0] = handler.act_deposit.selector;
-        selectors[1] = handler.act_redeemFraction.selector;
-        selectors[2] = handler.act_skewPrices.selector;
-        selectors[3] = handler.act_rebalance.selector;
+        selectors[1] = handler.act_withdrawFraction.selector;
+        selectors[2] = handler.act_redeemFraction.selector;
 
         targetSelector(FuzzSelector({addr: address(handler), selectors: selectors}));
         targetContract(address(handler));
@@ -40,14 +40,14 @@ contract InvariantLooping is StdInvariant, InvariantBase {
 
     // ==================== CORE INVARIANTS ====================
 
+    // Price per share should always be consistent under constant oracle prices.
+    function invariant_pricePerShareConsistency() external view {
+        assertTrue(!handler.ppsDiverged(), "price per share diverged under stable prices");
+    }
+
     /// @dev Successful redeem should not increase debt.
     function invariant_redeemSuccessDoesNotIncreaseDebt() external view {
         assertTrue(!handler.debtIncreasedOnRedeem(), "debt increased on redeem success");
-    }
-
-    /// @dev After successful rebalance, leverage should not diverge further from target.
-    function invariant_rebalanceConverges() external view {
-        assertTrue(!handler.leverageDivergedOnRebalance(), "rebalance diverged from target");
     }
 
     // ==================== ERC4626 INTEGRITY ====================
