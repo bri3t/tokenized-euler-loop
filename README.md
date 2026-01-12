@@ -1,5 +1,4 @@
 # tokenized-euler-loop
-
 A leveraged ERC-4626 vault built on top of Euler Vault Kit (EVK), integrating with existing Euler EVault markets for collateral, borrowing, and optional flash loans.
 
 The vault accepts a collateral asset (e.g., WETH) and maintains a leveraged position by borrowing a debt asset (e.g., USDC) from Euler EVault markets, swapping via a Uniswap V3-style router, and re-depositing collateral into Euler EVaults.
